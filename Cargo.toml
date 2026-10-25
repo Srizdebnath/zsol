@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/zsol-types",
+  "crates/zsol-wallet",
+  "crates/zsol-registry",
+  "crates/zsol-mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Srizdebnath/zsol"
+
+[workspace.dependencies]
+zsol-types = { path = "crates/zsol-types" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = "0.8"
+reqwest = { version = "0.12", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+anyhow = "1"
+blake2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+hex = "0.4"
+rusqlite = { version = "0.32", features = ["bundled", "wal"] }
+tower-http = { version = "0.6", features = ["trace", "limit"] }
+async-trait = "0.1"
+
+[profile.release]
+lto = "thin"
