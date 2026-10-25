@@ -130,9 +130,9 @@ impl AttestationObject {
     }
 
     pub fn b64u(&self) -> Result<String, ZsolError> {
-        serde_json::to_vec(self)
-            .map(|b| B64U.encode(&b))
-            .map_err(|_| ZsolError::Json)
+        // Wire form = canonical bytes (SPEC §7: registry MUST reject non-canonical objects,
+        // so the client side always emits the canonical encoding).
+        self.canonical().map(|b| B64U.encode(&b))
     }
 
     pub fn from_b64u(s: &str) -> Result<Self, ZsolError> {

@@ -4,6 +4,7 @@ resolver = "2"
 members = [
   "crates/zsol-types",
   "crates/zsol-wallet",
+  "crates/zsol-registry",
 ]
 
 [workspace.package]
@@ -27,7 +28,7 @@ blake2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
 hex = "0.4"
-rusqlite = { version = "0.32", features = ["bundled", "wal"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 tower-http = { version = "0.6", features = ["trace", "limit"] }
 async-trait = "0.1"
 

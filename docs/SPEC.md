@@ -122,6 +122,8 @@ The registry never sees keys, so mass surveillance has no single choke point (P2
 - `GET /v0/attestations/:agentId` → latest entries ascending by issuedAt with running `chainDigest`
  (`chainDigestₙ = BLAKE2b-256(chainDigestₙ₋₁ ‖ canonical(objectₙ))`, genesis = zero digest).
 - `GET /v0/health` → `{height?, ok}`.
+- `entryId = hex(chainDigest)` — chain digests are position-unique (each depends on its
+ predecessor), so the derivation is injective and needs no extra primitives.
 - Registry MUST reject: non-canonical objects, `claimZat < dust (10000)`, unknown `protocol`,
  duplicate `(agentId, anchorTxid)`.
 
