@@ -62,11 +62,15 @@ JSON, compact, base64url-transportable (`b64u`). Canonical form = key-sorted, no
 }
 ```
 
-**Object digest** `D = BLAKE2b-256("zsol/0.1" ‖ 0x1f ‖ canonical(object \ {memoBinding}))` —
-canonical form of the object with the `memoBinding` field **excluded**. The exclusion makes the
-anchor-memo fixed point computable (the memo carries D, so D cannot depend on the memo). Binding
-completeness is preserved: every field except `memoBinding` is bound through D, and `memoBinding`
-itself is verified by direct byte-equality against the on-chain scanned memo (§5/§6).
+**Object digest** `D = BLAKE2b-256("zsol/0.1" ‖ 0x1f ‖ canonical(object \ {memoBinding, anchorTxid, anchorHeight}))` —
+the **frame digest** over everything knowable at memo-write time (protocol tag, agentId, claimZat,
+accountUa, issuedAt, maxAgeHours). The exclusion makes the anchor-memo fixed point computable: the
+memo is written *before* the anchor is mined, so D cannot depend on `anchorTxid`/`anchorHeight`,
+and D carries the memo itself. What each excluded field is bound by instead:
+- `memoBinding`: direct byte-equality against the on-chain scanned memo (§5/§6).
+- `anchorTxid`: the verifier's scan observes that exact txid carrying that exact memo — writing
+ memos into an account requires that account's spend authority (P3).
+- `anchorHeight`: memo.height == object.anchorHeight, read from the scanned memo of that txid.
 
 **t0 claim tier:** object published to registry alone. Registry freshness/tamper-evidence only;
 **no solvency established yet** (this is what public claim means — honest by design).
@@ -82,7 +86,12 @@ border is the wallet's ZIP-302/ memo policy — verifier parses the first 45 byt
 - Amounts: encrypted on chain (z→z). Fee: standard shielded fee, paid *from* the attestation account.
 - **Balance appears unchanged** (in == out), so an anchor never "spends" the attested funds.
 
-Wait — self-spend input/output sums: the transfer spends notes worth ≥ B and returns ≥ B to the same
+Memo height semantics: the memo's `height` field is the attestor's **anchor window height `h*`**
+(estimated tip+1 at send time). If the tx mines with a different height, the attestor re-anchors
+(deterministic retry, funds unaffected since in == out); the published `anchorHeight` is the
+height of the *mined* anchor when height-lookup verbs are pinned at boot, otherwise the window
+height with the fallback recorded as evidence (documented, honest — never marketed as exact).
+"Wait — self-spend input/output sums: the transfer spends notes worth ≥ B and returns ≥ B to the same
 account; thermodynamically the attested balance remains. Verifier checks current balance ≥ B *at
 scan time* (§6), not just at anchor.
 
@@ -133,7 +142,7 @@ The registry never sees keys, so mass surveillance has no single choke point (P2
 |---|------|----------------|
 | `zsol_health` | both | stack status: zebra ready / zallet verbs pinned / registry reachable / height |
 | `zsol_prepare_anchor` | attestor | `claimZat` → checks account balance ≥ claim + floor, returns planned anchor shape (dry run) |
-| `zsol_anchor` | attestor | `claimZat` → performs self-spend via Zallet, awaits op result, returns txid + height (waits confirmations) |
+| `zsol_anchor` | attestor | `claimZat` + `agentId` (agentId is REQUIRED — it feeds the frame digest) → performs self-spend via Zallet, awaits op result, returns txid + height (waits confirmations) |
 | `zsol_make_attestation` | attestor | `claimZat` → derives object incl. memo binding from last anchor; returns object b64u |
 | `zsol_publish` | attestor | object → `POST` registry, returns entryId |
 | `zsol_share_scope` | attestor | peer label → exports scoped uivk of the dedicated account (never account #0; SRS invariant 5) |

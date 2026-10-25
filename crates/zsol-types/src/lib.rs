@@ -140,15 +140,20 @@ impl AttestationObject {
         serde_json::from_slice(&bytes).map_err(|_| ZsolError::Json)
     }
 
-    /// D(object) = BLAKE2b-256(PROTOCOL ‖ 0x1f ‖ canonical(object \ {memoBinding})) — SPEC §4.
-    /// The exclusion breaks the memo fixed-point circularity (the memo carries D, so D cannot
-    /// depend on the memo); memoBinding is instead byte-compared against the scanned on-chain
-    /// memo by the verifier (SPEC §6).
+    /// Frame digest (SPEC §4):
+    /// D = BLAKE2b-256(PROTOCOL ‖ 0x1f ‖ canonical(object \ {memoBinding, anchorTxid, anchorHeight}))
+    /// — everything knowable at memo-write time. The three excluded keys are removed from the
+    /// canonical input entirely (the anchor-time frame carries empty placeholders for them, so
+    /// placeholder values never enter the hash — anchor-time and verify-time inputs are identical).
+    /// The excluded fields are bound independently in §6: memoBinding by byte-equality with the
+    /// scanned memo, anchorTxid by scan correspondence, anchorHeight by memo.height equality.
     pub fn digest(&self) -> Result<[u8; 32], ZsolError> {
         let mut v = serde_json::to_value(self).map_err(|_| ZsolError::Json)?;
         sort_json(&mut v);
         if let serde_json::Value::Object(m) = &mut v {
-            m.remove("memoBinding");
+            for k in ["memoBinding", "anchorTxid", "anchorHeight"] {
+                m.remove(k);
+            }
         }
         let input = serde_json::to_vec(&v).map_err(|_| ZsolError::Json)?;
         Ok(digest_bytes(&input, b""))
@@ -327,21 +332,34 @@ mod tests {
         assert_eq!(hex::encode(d), GOLDEN_DIGEST_HEX);
     }
 
-    /// T-10: the digest input EXCLUDES memoBinding (SPEC §4) — this is what makes the
-    /// memo fixed point computable; objects differing only in memoBinding share D.
+    /// T-10: the frame digest EXCLUDES memoBinding, anchorTxid, anchorHeight (SPEC §4) —
+    /// this is what makes the memo fixed point computable; objects differing only in those
+    /// keys share D (the placeholders never enter the hash).
     #[test]
-    fn ac_digest_excludes_memo_binding() {
+    fn ac_digest_frame_exclusions() {
         let o = sample();
         let mut other = o.clone();
         other.memo_binding = "AAAA".into();
         assert_eq!(o.digest().unwrap(), other.digest().unwrap());
-        // binding property preserved: any OTHER field edit shifts D
+        let mut other = o.clone();
+        other.anchor_txid = "ff".repeat(64);
+        assert_eq!(o.digest().unwrap(), other.digest().unwrap());
+        let mut other = o.clone();
+        other.anchor_height += 7;
+        assert_eq!(o.digest().unwrap(), other.digest().unwrap());
+        // binding property preserved: any frame field edit shifts D
         let mut edited = o.clone();
         edited.claim_zat += 1;
         assert_ne!(o.digest().unwrap(), edited.digest().unwrap());
         let mut edited = o.clone();
         edited.agent_id = "agent-evil".into();
         assert_ne!(o.digest().unwrap(), edited.digest().unwrap());
+        // anchor-time frame (empty placeholders) hashes identically to the filled object
+        let mut frame = o.clone();
+        frame.memo_binding = String::new();
+        frame.anchor_txid = String::new();
+        frame.anchor_height = 0;
+        assert_eq!(frame.digest().unwrap(), o.digest().unwrap());
     }
 
     /// T-10: canonical/digest determinism + sensitivity (SRS FR-1.2).

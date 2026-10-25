@@ -43,6 +43,10 @@ pub struct Methods {
     pub addr_for_account: String,
     /// Tried in order: pinned first, then documented fallbacks (FR-2.x parity-aware).
     pub balance: Vec<String>,
+    /// uivk export family (share_scope); parity differs across Zallet betas.
+    pub export_key: Vec<String>,
+    /// Zebra raw transaction lookup (mined-height check for anchors).
+    pub raw_tx: String,
     pub send: String,
     pub op_status: String,
     pub op_result: String,
@@ -58,6 +62,8 @@ impl Default for Methods {
             list_accounts: "z_listaccounts".into(),
             addr_for_account: "z_getaddressforaccount".into(),
             balance: vec!["z_getbalanceforaccount".into(), "z_getbalance".into()],
+            export_key: vec!["z_exportkey".into(), "z_exportaccount".into()],
+            raw_tx: "getrawtransaction".into(),
             send: "z_sendmany".into(),
             op_status: "z_getoperationstatus".into(),
             op_result: "z_getoperationresult".into(),
@@ -101,6 +107,11 @@ impl Methods {
                 "ZSOL_RPC_METHOD_BALANCE",
                 vec!["z_getbalanceforaccount".into(), "z_getbalance".into()],
             ),
+            export_key: family(
+                "ZSOL_RPC_METHOD_EXPORTKEY",
+                vec!["z_exportkey".into(), "z_exportaccount".into()],
+            ),
+            raw_tx: one("ZSOL_RPC_METHOD_RAWTX", "getrawtransaction".into()),
             send: one("ZSOL_RPC_METHOD_SEND", "z_sendmany".into()),
             op_status: one("ZSOL_RPC_METHOD_OPSTATUS", "z_getoperationstatus".into()),
             op_result: one("ZSOL_RPC_METHOD_OPRESULT", "z_getoperationresult".into()),
@@ -238,16 +249,17 @@ impl Client {
             .await
     }
 
-    /// Balance family probe (SPEC §8 zsol_prepare_anchor budget check). Returns the
-    /// method that WORKED + its raw result. A param-shape error on a present verb still
-    /// counts as "present" (code -8/-5/-3/-32602 in zcashd-shaped RPCs) with Null result.
-    pub async fn balance(&self) -> Result<(String, Value), WalletError> {
+    /// Generic family probe (parity-aware, boot-pinned). Returns the method that WORKED
+    /// + its raw result. A param-shape error on a present verb still counts as "present"
+    /// (code -8/-5/-3/-32602 in zcashd-shaped RPCs) with Null result.
+    pub async fn probe_family(
+        &self,
+        verbs: &[String],
+        params: Value,
+    ) -> Result<(String, Value), WalletError> {
         let mut last: Option<WalletError> = None;
-        for m in &self.cfg.methods.balance {
-            match self
-                .call(Base::Zallet, m, json!([self.cfg.attest_account]))
-                .await
-            {
+        for m in verbs {
+            match self.call(Base::Zallet, m, params.clone()).await {
                 Ok(v) => return Ok((m.clone(), v)),
                 Err(WalletError::MissingVerb(_)) => {
                     last = Some(WalletError::MissingVerb(m.clone()))
@@ -260,7 +272,34 @@ impl Client {
                 Err(e) => return Err(e),
             }
         }
-        Err(last.unwrap_or(WalletError::MissingVerb("balance family".into())))
+        Err(last.unwrap_or(WalletError::MissingVerb("family".into())))
+    }
+
+    /// Balance family probe for ANY account (attestor's dedicated account and the
+    /// verifier's imported scope both need this). SPEC §8 zsol_prepare_anchor / §6
+    /// balance-at-scan.
+    pub async fn balance_for(&self, account: u64) -> Result<(String, Value), WalletError> {
+        self.probe_family(&self.cfg.methods.balance, json!([account]))
+            .await
+    }
+
+    /// Balance probe for the attestor's dedicated account.
+    pub async fn balance(&self) -> Result<(String, Value), WalletError> {
+        self.balance_for(self.cfg.attest_account).await
+    }
+
+    /// uivk export family (share_scope). Target is the wallet's own address/account
+    /// reference — export never executes spends and never leaves this wallet's uivk
+    /// scope (scope guard lives in the zsol-mcp layer, FR-2.8).
+    pub async fn export_key(&self, target: &str) -> Result<(String, Value), WalletError> {
+        self.probe_family(&self.cfg.methods.export_key, json!([target]))
+            .await
+    }
+
+    /// Zebra raw tx lookup (verbose), used by anchor lifecycles for mined-height checks.
+    pub async fn raw_tx(&self, txid: &str) -> Result<Value, WalletError> {
+        self.call(Base::Zebra, &self.cfg.methods.raw_tx, json!([txid, 1]))
+            .await
     }
 
     /// Diversified same-account UA derivation (SPEC P5/§3 attest account).
@@ -312,6 +351,16 @@ impl Client {
     pub async fn op_status(&self) -> Result<Value, WalletError> {
         self.call(Base::Zallet, &self.cfg.methods.op_status, json!([]))
             .await
+    }
+
+    /// Targeted op status (FR-2.5 lifecycle: submit → poll → result).
+    pub async fn op_status_for(&self, opid: &str) -> Result<Value, WalletError> {
+        self.call(
+            Base::Zallet,
+            &self.cfg.methods.op_status,
+            json!([opid.to_string()]),
+        )
+        .await
     }
 
     pub async fn op_result(&self, opid: &str) -> Result<Value, WalletError> {

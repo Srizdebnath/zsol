@@ -87,6 +87,20 @@ async fn main() -> ExitCode {
         Err(e) => classify(&e),
     };
     results.push(("balance-family", balance_state));
+    // Export family probe: invalid ref → param-shape proves the verb is present;
+    // a present export verb NEVER returns material for an invalid reference.
+    let export_state = match client.export_key("zsol-doctor-invalid-ref").await {
+        Ok(_) => VerbState::Present,
+        Err(e) => classify(&e),
+    };
+    results.push(("export-key-family", export_state));
+    // Raw-tx probe: dummy txid (all zeros) — not a real lookup, param-shape at most.
+    probe(
+        "getrawtransaction",
+        client.raw_tx(&"0".repeat(64)),
+        &mut results,
+    )
+    .await;
     probe(
         "z_sendmany-params-probe",
         client.call(Base::Zallet, &cfg.methods.send, serde_json::json!([null])),
@@ -173,6 +187,17 @@ async fn main() -> ExitCode {
         println!("# balance family resolution:");
         if present("balance-family") {
             println!("# balance family: at least one pinned method served a value");
+        }
+        println!("# export family resolution:");
+        if present("export-key-family") {
+            println!("# export family: at least one pinned method answered (uivk export for share_scope)");
+        } else {
+            println!("# ZSOL_RPC_METHOD_EXPORTKEY: no export verb present — share_scope will degrade (FR-2.1)");
+        }
+        if present("getrawtransaction") {
+            println!("ZSOL_RPC_METHOD_RAWTX=getrawtransaction");
+        } else {
+            println!("# ZSOL_RPC_METHOD_RAWTX missing: mined-height evidence degrades to estimate (honest marker)");
         }
     }
 
