@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use serde_json::Value;
 
 use crate::ops::ToolCtx;
@@ -32,14 +32,14 @@ async fn no_delete() -> impl IntoResponse {
     (StatusCode::OK, "session-less server: nothing to clear")
 }
 
-async fn post_mcp(State(ctx): State<Arc<ToolCtx>>, body: String) -> impl IntoResponse {
+/// Streamable HTTP: responses MUST be `application/json` JSON-RPC 2.0 (the
+/// official MCP client hard-rejects text/plain — parity requirement, T-33).
+async fn post_mcp(State(ctx): State<Arc<ToolCtx>>, body: String) -> Response {
     let values = match proto::envelope(&body) {
         Ok(vs) => vs,
         Err((id, code, msg)) => {
-            return (
-                StatusCode::OK,
-                serde_json::to_string(&proto::error(&id, code, &msg)).unwrap_or_default(),
-            )
+            let err = proto::error(&id, code, &msg);
+            return (StatusCode::OK, Json(err)).into_response();
         }
     };
     let mut responses = Vec::new();
@@ -51,5 +51,6 @@ async fn post_mcp(State(ctx): State<Arc<ToolCtx>>, body: String) -> impl IntoRes
         1 => responses.into_iter().next().unwrap_or(Value::Null),
         _ => Value::Array(responses),
     };
-    (StatusCode::OK, serde_json::to_string(&out).unwrap_or_default())
+    (StatusCode::OK, Json(out)).into_response()
 }
+
