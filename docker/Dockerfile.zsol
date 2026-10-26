@@ -1,0 +1,21 @@
+# zsol — build once, ship both binaries (zsol-registry, zsol-mcp).
+# Build with cache mounts so repeated builds are fast; runtime is slim.
+#
+#   docker build -f docker/Dockerfile.zsol -t zsol:local --build-arg PROFILE=release .
+#
+# The zsol contract is 0-mock: only the workspace sources + Cargo manifests go
+# in; nothing outside the repo is fetched at build time (deps via cargo lock).
+FROM rust:1.98-slim AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release -p zsol-registry -p zsol-mcp
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/zsol-registry /usr/local/bin/zsol-registry
+COPY --from=build /src/target/release/zsol-mcp /usr/local/bin/zsol-mcp
+# No default CMD: compose sets `command` per service.

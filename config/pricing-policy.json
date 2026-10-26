@@ -1,0 +1,16 @@
+{
+  "version": "1",
+  "issuer": "zsol-merchant-demo",
+  "tiers": {
+    "verified": {
+      "discountBps": 100,
+      "note": "§6 all checks pass in the merchant's own stack within maxAgeHours — 1% discount"
+    },
+    "claim-only": {
+      "discountBps": 0,
+      "note": "registry entry exists but §6 verification failed or unavailable — list price, never punished beyond that"
+    }
+  },
+  "staleAfterHours": 24,
+  "note": "T-42 repo config (FR-5.2): the DISCOUNT is the only reward for verification; claim-only never surcharges. Verified means the merchant re-ran the checks; it is not taken on faith from the agent or the registry."
+}
