@@ -17,11 +17,13 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use zsol_types::{chain_digest, AttestationObject, ReasonCode, ZsolError};
@@ -43,6 +45,14 @@ pub enum RegistryReject {
     },
     #[error("registry unavailable: {0}")]
     Db(String),
+    /// FR-3.4 block-diff guard: a POST whose anchorHeight is below the highest
+    /// already-accepted anchorHeight is refused with 503 — mutations are refused
+    /// while the chain appears to regress (SRS FR-3.4, T-08 harness).
+    #[error("chain descended: posted anchorHeight {posted} < watermark {watermark}")]
+    ChainDescended { watermark: u64, posted: u64 },
+    /// FR-3.4 rate limit (429).
+    #[error("rate limited: retry in {retry_after_ms} ms")]
+    RateLimited { retry_after_ms: u64 },
 }
 
 impl RegistryReject {
@@ -69,10 +79,19 @@ impl RegistryReject {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({"error": "registry-unavailable", "detail": d}),
             ),
+            Self::ChainDescended { watermark, posted } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error": "chain-descended", "watermarkHeight": watermark, "postedHeight": posted}),
+            ),
+            Self::RateLimited { retry_after_ms } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({"error": "rate-limited", "retryAfterMs": retry_after_ms}),
+            ),
         }
     }
 }
 
+/// Genesis of the digest chain (SPEC §7): digest₀ = 0.
 pub const GENESIS_DIGEST_HEX: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -128,6 +147,25 @@ pub fn init_db(conn: &mut Connection) -> rusqlite::Result<()> {
         BEFORE DELETE ON chain_head
         BEGIN
             SELECT RAISE(ABORT, 'chain_head: immutable singleton');
+        END;
+
+        -- FR-3.4 block-diff guard state: highest anchorHeight ever accepted.
+        -- Trigger makes regression physically impossible, not just inconvenient.
+        CREATE TABLE IF NOT EXISTS chain_meta (
+            id               INTEGER PRIMARY KEY CHECK (id = 1),
+            watermark_height INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO chain_meta (id, watermark_height) VALUES (1, 0);
+        CREATE TRIGGER IF NOT EXISTS chain_meta_no_descend
+        AFTER UPDATE ON chain_meta
+        WHEN NEW.watermark_height < OLD.watermark_height
+        BEGIN
+            SELECT RAISE(ABORT, 'chain-descended: the watermark may only advance');
+        END;
+        CREATE TRIGGER IF NOT EXISTS chain_meta_no_delete
+        BEFORE DELETE ON chain_meta
+        BEGIN
+            SELECT RAISE(ABORT, 'chain_meta: immutable singleton');
         END;
         "#,
     )
@@ -190,6 +228,23 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
     }
     prev.copy_from_slice(&prev_digest);
 
+    // FR-3.4 block-diff guard: refuse mutations whose anchorHeight regresses
+    // below the highest accepted height (checked in-txn so concurrent posts
+    // cannot race past the watermark).
+    let watermark: u64 = tx
+        .query_row(
+            "SELECT watermark_height FROM chain_meta WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| RegistryReject::Db(format!("watermark read: {e}")))?;
+    if object.anchor_height < watermark {
+        return Err(RegistryReject::ChainDescended {
+            watermark,
+            posted: object.anchor_height,
+        });
+    }
+
     // Dedupe inside the txn so a concurrent equal post can't race past us.
     let existing: Option<(String, Vec<u8>)> = tx
         .query_row(
@@ -234,6 +289,15 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
         params![&new_digest[..], seq],
     )
     .map_err(|e| RegistryReject::Db(format!("head advance: {e}")))?;
+
+    // Watermark only ever advances (trigger guards the floor).
+    if object.anchor_height > watermark {
+        tx.execute(
+            "UPDATE chain_meta SET watermark_height = ?1 WHERE id = 1",
+            params![object.anchor_height],
+        )
+        .map_err(|e| RegistryReject::Db(format!("watermark advance: {e}")))?;
+    }
 
     tx.commit()
         .map_err(|e| RegistryReject::Db(format!("txn commit: {e}")))?;
@@ -329,16 +393,169 @@ pub fn fetch(conn: &Connection, agent_id: &str) -> Result<FetchResult, RegistryR
 pub struct HealthInfo {
     pub ok: bool,
     pub chain_length: i64,
+    pub watermark_height: u64,
 }
 
 pub fn health(conn: &Connection) -> Result<HealthInfo, RegistryReject> {
-    let length: i64 = conn
-        .query_row("SELECT length FROM chain_head WHERE id = 1", [], |r| r.get(0))
+    let (length, watermark): (i64, u64) = conn
+        .query_row(
+            "SELECT length, watermark_height FROM chain_head, chain_meta WHERE chain_head.id = 1 AND chain_meta.id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(|e| RegistryReject::Db(format!("health: {e}")))?;
-    Ok(HealthInfo {
-        ok: true,
-        chain_length: length,
-    })
+    Ok(HealthInfo { ok: true, chain_length: length, watermark_height: watermark })
+}
+
+// ---------------- FR-3.4 rate limiter (per-IP token bucket; 429) ----------------
+
+pub struct RateLimiter {
+    buckets: Mutex<HashMap<String, Bucket>>,
+    pub per_second: f64,
+    pub burst: f64,
+}
+
+struct Bucket {
+    tokens: f64,
+    last_refill: std::time::Instant,
+}
+
+pub enum LimitDecision {
+    Allowed,
+    Limited { retry_after_ms: u64 },
+}
+
+impl RateLimiter {
+    pub fn new(per_second: u32, burst: u32) -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            per_second: (per_second.max(1)) as f64,
+            burst: (burst.max(1)) as f64,
+        }
+    }
+
+    /// One token = one request for this key. Refill is continuous.
+    pub fn check(&self, key: &str) -> LimitDecision {
+        let now = std::time::Instant::now();
+        // Poison recovery: availability over panic propagation.
+        let mut buckets = self
+            .buckets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let bucket = buckets
+            .entry(key.to_string())
+            .or_insert(Bucket { tokens: self.burst, last_refill: now });
+        let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.per_second).min(self.burst);
+        bucket.last_refill = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            LimitDecision::Allowed
+        } else {
+            let need = 1.0 - bucket.tokens;
+            LimitDecision::Limited {
+                retry_after_ms: (need / self.per_second * 1000.0).ceil() as u64,
+            }
+        }
+    }
+}
+
+/// Body size caps + rate budgets, env-tunable: ZSOL_REGISTRY_MAX_BODY,
+/// ZSOL_REGISTRY_RATE_PER_SEC, ZSOL_REGISTRY_RATE_BURST.
+#[derive(Clone, Debug)]
+pub struct Limits {
+    pub max_body_bytes: usize,
+    pub post_per_second: u32,
+    pub post_burst: u32,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self { max_body_bytes: 64_000, post_per_second: 5, post_burst: 10 }
+    }
+}
+
+impl Limits {
+    pub fn from_env() -> Self {
+        let env = |k: &str, d: i64| {
+            std::env::var(k)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(d)
+        };
+        Self {
+            max_body_bytes: env("ZSOL_REGISTRY_MAX_BODY", 64_000).max(1) as usize,
+            post_per_second: env("ZSOL_REGISTRY_RATE_PER_SEC", 5).max(1) as u32,
+            post_burst: env("ZSOL_REGISTRY_RATE_BURST", 10).max(1) as u32,
+        }
+    }
+}
+
+// ---------------- T-29 JSON logs with req_id (NF-6.2: no PII at info) ----------------
+
+static REQ_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Short, non-reversible request id (utc-nanosecond slice + seq). Never an address.
+pub fn next_req_id() -> String {
+    use std::sync::atomic::Ordering;
+    let n = REQ_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    format!("{:07x}-{:04x}", t & 0xfff_ffff_ffff, n)
+}
+
+/// Log only the route TEMPLATE — concrete agentIds never appear at info (NF-6.2).
+fn redact_path(path: &str) -> String {
+    if path.starts_with("/v0/attestations/") {
+        "/v0/attestations/:id".into()
+    } else {
+        path.into()
+    }
+}
+
+async fn request_logger(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::header;
+    let method = req.method().clone();
+    let path = redact_path(req.uri().path());
+    let started = std::time::Instant::now();
+    let req_id = next_req_id();
+    let mut resp = next.run(req).await;
+    tracing::info!(
+        req_id = %req_id,
+        method = %method,
+        path = %path,
+        status = resp.status().as_u16(),
+        ms = started.elapsed().as_millis() as u64,
+        "request"
+    );
+    if let Ok(v) = header::HeaderValue::from_str(&req_id) {
+        resp.headers_mut().insert(header::HeaderName::from_static("x-request-id"), v);
+    }
+    resp
+}
+
+async fn rate_limit_post(
+    axum::extract::State(limiter): axum::extract::State<Arc<RateLimiter>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if req.method() != axum::http::Method::POST {
+        return next.run(req).await;
+    }
+    match limiter.check(&addr.ip().to_string()) {
+        LimitDecision::Allowed => next.run(req).await,
+        LimitDecision::Limited { retry_after_ms } => {
+            tracing::warn!(ip = %addr.ip(), ms = retry_after_ms, "rate limited POST");
+            let (status, body) = RegistryReject::RateLimited { retry_after_ms }.wire();
+            (status, Json(body)).into_response()
+        }
+    }
 }
 
 // ---------------- axum glue (thin; logic lives above) ----------------
@@ -401,7 +618,11 @@ async fn health_route(State(state): State<AppState>) -> (StatusCode, Json<Value>
     match health(&guard) {
         Ok(h) => (
             StatusCode::OK,
-            Json(json!({"ok": h.ok, "chainLength": h.chain_length})),
+            Json(json!({
+                "ok": h.ok,
+                "chainLength": h.chain_length,
+                "watermarkHeight": h.watermark_height,
+            })),
         ),
         Err(e) => e.wire().into_wrapped(),
     }
@@ -417,13 +638,21 @@ impl WireTuple for (StatusCode, Value) {
     }
 }
 
-pub fn router(state: AppState) -> Router {
+/// Router with FR-3.4 layers. Outermost = logger (sees 429/413 too), then the
+/// per-IP POST token bucket, then the body-size cap; routes innermost.
+/// Serve with `app.into_make_service_with_connect_info::<SocketAddr>()` so the
+/// rate bucket keys on the real client IP.
+pub fn router(state: AppState, limits: Limits) -> Router {
+    let limiter = Arc::new(RateLimiter::new(limits.post_per_second, limits.post_burst));
     Router::new()
         .route("/v0/attestations", post(publish_route))
         // axum 0.8 path-param syntax
         .route("/v0/attestations/{agentId}", get(fetch_route))
         .route("/v0/health", get(health_route))
         .with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(limits.max_body_bytes))
+        .layer(axum::middleware::from_fn_with_state(limiter, rate_limit_post))
+        .layer(axum::middleware::from_fn(request_logger))
 }
 
 // ---------------- tests (SRS FR-3.x ACs) ----------------
@@ -442,11 +671,16 @@ mod tests {
 
     /// Self-consistent fixture (fixed point via memoBinding exclusion, SPEC §4).
     fn sample(agent: &str, txid: &str, issued_at: u64) -> AttestationObject {
+        sample_h(agent, txid, issued_at, 4_509_856)
+    }
+
+    /// Height-parameterized variant (T-08 harness needs distinct heights).
+    fn sample_h(agent: &str, txid: &str, issued_at: u64, height: u64) -> AttestationObject {
         let mut o = AttestationObject {
             protocol: zsol_types::PROTOCOL.into(),
             agent_id: agent.into(),
             claim_zat: 1_000_000,
-            anchor_height: 4_509_856,
+            anchor_height: height,
             anchor_txid: txid.into(),
             account_ua: "u1test".into(),
             memo_binding: String::new(),
@@ -592,5 +826,67 @@ mod tests {
         let h = health(&c).unwrap();
         assert!(h.ok);
         assert_eq!(h.chain_length, 0);
+        assert_eq!(h.watermark_height, 0);
+    }
+
+    /// T-08 harness (FR-3.4): height regression ⇒ ChainDescended; equal-or-higher OK.
+    #[test]
+    fn ac_t08_chain_descended_harness() {
+        let mut c = open_mem();
+        // watermark starts at 0; any height accepted first
+        publish(&mut c, body_of(&sample_h("agent-1", &"10".repeat(32), 111, 500)), 111)
+            .expect("first anchor at height 500 accepted");
+        // REGRESSION: 499 < 500 → refused with ChainDescended
+        let err = publish(&mut c, body_of(&sample_h("agent-1", &"11".repeat(32), 112, 499)), 112)
+            .unwrap_err();
+        assert!(matches!(err, RegistryReject::ChainDescended { watermark: 500, posted: 499 }));
+        // wire status is 503 with slug chain-descended
+        let (status, body) = err.wire();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "chain-descended");
+        // EQUAL height is allowed (multiple anchors may share a height)
+        publish(&mut c, body_of(&sample_h("agent-1", &"12".repeat(32), 113, 500)), 113)
+            .expect("equal height accepted");
+        // advance
+        publish(&mut c, body_of(&sample_h("agent-1", &"13".repeat(32), 114, 501)), 114)
+            .expect("advance accepted");
+        // finally: an older agent re-anchoring at an older height regresses
+        let err = publish(&mut c, body_of(&sample_h("agent-2", &"14".repeat(32), 115, 400)), 115)
+            .unwrap_err();
+        assert!(matches!(err, RegistryReject::ChainDescended { watermark: 501, .. }));
+        // health reports the watermark
+        let h = health(&c).unwrap();
+        assert_eq!(h.watermark_height, 501);
+    }
+
+    /// The anti-regression trigger is PHYSICAL: direct SQL cannot lower the watermark.
+    #[test]
+    fn ac_chain_descended_trigger_physical() {
+        let mut c = open_mem();
+        publish(&mut c, body_of(&sample_h("agent-1", &"a1".repeat(32), 111, 900)), 111).unwrap();
+        let lowered = c
+            .execute("UPDATE chain_meta SET watermark_height = 500 WHERE id = 1", params![]);
+        assert!(lowered.is_err(), "watermark regression must abort (trigger)");
+        let deleted = c.execute("DELETE FROM chain_meta WHERE id = 1", params![]);
+        assert!(deleted.is_err(), "chain_meta row is immutable");
+    }
+
+    /// FR-3.4 rate limit: burst exhausts → Limited with retry-after; other keys
+    /// unaffected; time refills the bucket.
+    #[test]
+    fn ac_rate_limiter_bucket() {
+        let rl = RateLimiter::new(2, 2); // 2/s, burst 2
+        for _ in 0..2 {
+            assert!(matches!(rl.check("ip-1"), LimitDecision::Allowed));
+        }
+        match rl.check("ip-1") {
+            LimitDecision::Limited { retry_after_ms } => assert!(retry_after_ms > 0),
+            LimitDecision::Allowed => panic!("burst exhausted but allowed"),
+        }
+        // other key isolated
+        assert!(matches!(rl.check("ip-2"), LimitDecision::Allowed));
+        // ~0.6 s at 2/s ≈ 1 token back
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        assert!(matches!(rl.check("ip-1"), LimitDecision::Allowed));
     }
 }
