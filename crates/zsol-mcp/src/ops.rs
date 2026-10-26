@@ -41,6 +41,7 @@ pub struct AnchorRecord {
     pub memo_bytes: Vec<u8>,
     pub memo_height: u64,
     pub account_idx: u64,
+    pub opid: Option<String>,
     pub txid: String,
     pub mined_height: Option<u64>,
     pub height_source: &'static str,
@@ -49,13 +50,9 @@ pub struct AnchorRecord {
 
 impl AnchorRecord {
     fn self_spend_params(&self) -> Value {
-        Client::build_self_spend_params(
-            self.account_idx,
-            &self.ua,
-            self.claim_zat,
-            &self.memo_bytes,
-            1,
-        )
+        // from = the attest account's own unified address (zallet parity); the
+        // record's derivation ran in ops::prepare/last_anchor path (self.ua).
+        Client::build_self_spend_params(&self.ua, &self.ua, self.claim_zat, &self.memo_bytes, 1)
     }
 }
 
@@ -205,6 +202,20 @@ pub fn num_to_zat(v: &Value) -> Option<u64> {
 }
 
 pub fn unwrap_balance(v: &Value) -> (Option<u64>, &'static str) {
+    // zallet v2 (v0.1.0-beta): {"pools":{"transparent":{"valueZat":…}, …}}
+    // Sum of pool valueZat (zatoshi) — always surfaced w/ its interpretation tag.
+    if let Some(pools) = v.get("pools").and_then(Value::as_object) {
+        if !pools.is_empty() {
+            let sum: u128 = pools
+                .values()
+                .filter_map(|p| p.get("valueZat").and_then(Value::as_u64))
+                .map(u128::from)
+                .sum();
+            if sum <= u64::MAX as u128 {
+                return (Some(sum as u64), "zallet-pools=zat");
+            }
+        }
+    }
     if let Some(b) = v.get("balance") {
         if let Some(z) = unwrap_u64(b) {
             return (Some(z), "object-balance=zat");
@@ -248,11 +259,13 @@ fn deep_find_ua(v: &Value, depth: usize) -> Option<String> {
     if depth == 0 {
         return None;
     }
+    // HRP prefixes per network: mainnet "u1…", testnet "utest1…", regtest "uregtest1…".
+    const UA_PREFIXES: [&str; 3] = ["u1", "utest1", "uregtest1"];
     match v {
         Value::Object(m) => {
             for val in m.values() {
                 if let Some(s) = val.as_str() {
-                    if s.starts_with("u1") && s.len() > 40 {
+                    if s.len() > 40 && UA_PREFIXES.iter().any(|p| s.starts_with(p)) {
                         return Some(s.to_string());
                     }
                 }
@@ -302,8 +315,9 @@ fn map_wallet_err(e: &WalletError, verb: &'static str) -> ToolError {
         WalletError::Rpc { code, .. } => {
             ToolError::slug("wallet-rpc", format!("{verb}: rpc error code {code}"))
         }
-        WalletError::Transport(_) => {
-            ToolError::slug("wallet-unreachable", format!("{verb}: transport"))
+        WalletError::Transport(t) => {
+            // Keep the wallet's reason visible to agents (500 detail layout etc.).
+            ToolError::slug("wallet-unreachable", format!("{verb}: transport ({t})"))
         }
         WalletError::EnvMissing(k) => ToolError::slug(
             "wallet-config",
@@ -467,7 +481,7 @@ async fn submit_attempt(
         height: memo_height,
         digest: d,
     };
-    let rec = AnchorRecord {
+    let mut rec = AnchorRecord {
         agent_id: agent_id.to_string(),
         claim_zat: claim,
         ua: ua.to_string(),
@@ -476,6 +490,7 @@ async fn submit_attempt(
         memo_bytes: memo.encode().to_vec(),
         memo_height,
         account_idx: ctx.cfg.attest_account,
+        opid: None,
         txid: String::new(),
         mined_height: None,
         height_source: "pending",
@@ -489,25 +504,52 @@ async fn submit_attempt(
     if let Some(t) = deep_find_txid(&send_v) {
         return Ok((memo, t, rec));
     }
+    // zcashd replies {"operationId":"op-…"}; Zallet beta.1 replies the bare
+    // opid STRING itself — accept both before failing shape (FR-2.4 tolerance).
     let opid = deep_find(&send_v, "operationId", 3)
         .or_else(|| deep_find(&send_v, "opid", 3))
         .or_else(|| deep_find(&send_v, "id", 3))
         .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .or_else(|| send_v.as_str().map(|s| s.to_string()))
         .ok_or(ToolError::slug(
             "wallet-shape",
             "send reply had neither txid nor operationId",
         ))?;
-    let txid = wait_send_op(ctx, &opid).await?;
-    Ok((memo, txid, rec))
+    rec.opid = Some(opid.clone());
+    match wait_send_op(ctx, &opid).await {
+        Ok(txid) => Ok((memo, txid, rec)),
+        // The send IS submitted; the op is still executing server-side (zallet
+        // Orchard proving is slow on small hosts). Hand back a RESUME record
+        // (txid empty, opid tracked) — port: FR-2.4 honesty, no orphaned claims.
+        Err(e) if e.slug == Some("send-op-timeout") => Ok((memo, String::new(), rec)),
+        Err(e) => Err(e),
+    }
+}
+
+/// Env-tunable poll budget (FR-2.5): ZSOL_OP_POLL_SECS overrides; default 35s.
+/// Zallet regtest ops take ~40s per Orchard tx (spend proving on small hosts).
+fn op_poll_secs() -> u64 {
+    let raw = std::env::var("ZSOL_OP_POLL_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    match raw {
+        Some(s) if s > 600 => {
+            tracing::warn!("ZSOL_OP_POLL_SECS clamped: {s} > 600");
+            600
+        }
+        Some(s) => s,
+        None => OP_POLL_ALLOW_SECS,
+    }
 }
 
 async fn wait_send_op(ctx: &ToolCtx, opid: &str) -> Result<String, ToolError> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(OP_POLL_ALLOW_SECS);
+    let secs = op_poll_secs();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     loop {
         if std::time::Instant::now() > deadline {
             return Err(ToolError::slug(
                 "send-op-timeout",
-                format!("op did not complete within {OP_POLL_ALLOW_SECS}s (FR-2.5 budget)"),
+                format!("op did not complete within {secs}s (FR-2.5 budget)"),
             ));
         }
         let v = ctx.w.op_status_for(opid).await;
@@ -615,8 +657,21 @@ pub async fn anchor(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
         let (_memo, txid, mut rec) =
             submit_attempt(ctx, &agent_id, claim, &ua, issued, max_age, memo_height).await?;
         attempts += 1;
-        rec.txid = txid.clone();
         rec.attempts = attempts;
+
+        if txid.is_empty() {
+            // Submitted but not yet proven: keep the record so make_attestation
+            // (or a retried anchor) can resume polling the SAME opid — no orphan.
+            rec.height_source = "op-pending-resume";
+            *ctx.last_anchor
+                .lock()
+                .map_err(|_| ToolError::slug("internal", "state lock poisoned"))? = Some(rec);
+            return Err(ToolError::slug(
+                "send-op-timeout",
+                "anchor submitted; op still executing — resume via zsol_make_attestation",
+            ));
+        }
+        rec.txid = txid.clone();
 
         let (mined, source): (Option<u64>, &'static str) = match ctx.w.raw_tx(&txid).await {
             Ok(v) => match unwrap_mined_height(&v) {
@@ -697,7 +752,7 @@ async fn plan_dry(
 }
 
 pub async fn make_attestation(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
-    let rec = ctx
+    let mut rec = ctx
         .last_anchor
         .lock()
         .map_err(|_| ToolError::slug("internal", "state lock poisoned"))?
@@ -706,6 +761,30 @@ pub async fn make_attestation(ctx: &ToolCtx, args: &Value) -> Result<Value, Tool
             ReasonCode::AnchorNotMined,
             "no anchor performed in this session; run zsol_anchor first",
         ))?;
+    if rec.txid.is_empty() {
+        // Resume: the anchor op was submitted but hadn't finished when zsol_anchor
+        // returned (FR-2.5 budget). Poll the SAME opid to conclusion — never a
+        // second send, never a fabricated txid.
+        let opid = rec.opid.clone().ok_or(ToolError::slug(
+            "wallet-shape",
+            "anchor record has no opid to resume",
+        ))?;
+        let txid = wait_send_op(ctx, &opid).await?;
+        rec.txid = txid.clone();
+        let (mined, source): (Option<u64>, &'static str) = match ctx.w.raw_tx(&txid).await {
+            Ok(v) => match unwrap_mined_height(&v) {
+                Some(h) if h > 0 => (Some(h), "rawtx-blockheight"),
+                _ => (None, "rawtx-unconfirmed"),
+            },
+            Err(WalletError::MissingVerb(_)) => (None, "rawtx-verb-missing"),
+            Err(e) => return Err(map_wallet_err(&e, "getrawtransaction")),
+        };
+        rec.mined_height = mined;
+        rec.height_source = source;
+        *ctx.last_anchor
+            .lock()
+            .map_err(|_| ToolError::slug("internal", "state lock poisoned"))? = Some(rec.clone());
+    }
     if let Some(c) = unwrap_u64(args.get("claimZat").unwrap_or(&Value::Null)) {
         if c != rec.claim_zat {
             return Err(ToolError::reason(
@@ -1091,111 +1170,115 @@ pub async fn verify(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
         false
     };
 
-    // C4/C5 imported scope + anchor visible under it.
+    // C4–C7 scope-dependent rows: verified only under an imported scope. With NO
+    // scope the tier is at most claim-only — skipping is EXPLICIT, and no
+    // wallet-side self-attestation ever substitutes for the scope's scan view.
     let scope = ctx
         .scope
         .lock()
         .map_err(|_| ToolError::slug("internal", "state lock poisoned"))?
         .clone();
-    let Some(s) = scope else {
-        return Err(ToolError::reason(
+    if scope.is_none() {
+        checks.push(row_reason(
             ReasonCode::UivkUnavailable,
-            "import a scope first (zsol_import_scope) before verify",
+            "scope",
+            "no uivk imported: anchor-scan + balance rows skipped, tier claim-only (zallet beta.1 exports no unified viewing key)",
         ));
-    };
-    let scope = s;
-    let view = ctx.w.view_tx(&obj.anchor_txid).await;
-    let mut mined_ok = false;
-    match view {
-        Ok(_) => {
-            checks.push(row_ok(
-                "anchor-visible-in-scan",
-                "txid known to imported scope",
-            ));
-            mined_ok = true;
-        }
-        Err(WalletError::Rpc { code, .. }) if [-8, -5].contains(&code) => {
-            checks.push(row_reason(
-                ReasonCode::AnchorNotMined,
-                "anchor-visible-in-scan",
-                "txid unknown to verifier wallet scope/scan",
-            ));
-        }
-        Err(e) => return Err(map_wallet_err(&e, "z_viewtransaction")),
     }
-
-    // C6 outputs ≥ claim (+ evidence rows; mined height as separate evidence).
-    if mined_ok && digest_ok {
-        if let Ok(v) = ctx.w.view_tx(&obj.anchor_txid).await {
-            if let Some(mined) = unwrap_mined_height(&v) {
+    if let Some(scope) = scope {
+        let view = ctx.w.view_tx(&obj.anchor_txid).await;
+        let mut mined_ok = false;
+        match view {
+            Ok(_) => {
                 checks.push(row_ok(
-                    "mined-height-evidence",
-                    format!("minedAtHeight={mined}; window={}", obj.anchor_height),
+                    "anchor-visible-in-scan",
+                    "txid known to imported scope",
+                ));
+                mined_ok = true;
+            }
+            Err(WalletError::Rpc { code, .. }) if [-8, -5].contains(&code) => {
+                checks.push(row_reason(
+                    ReasonCode::AnchorNotMined,
+                    "anchor-visible-in-scan",
+                    "txid unknown to verifier wallet scope/scan",
                 ));
             }
-            let outputs = deep_find(&v, "output", 3)
-                .or_else(|| deep_find(&v, "outputs", 3))
-                .and_then(|o| o.as_array().cloned());
-            match outputs {
-                Some(outs) => {
-                    let sum: u64 = outs
-                        .iter()
-                        .filter_map(|o| {
-                            deep_find(o, "valueZat", 2)
-                                .and_then(|z| unwrap_u64(&z))
-                                .or_else(|| {
-                                    num_to_zat(&deep_find(o, "value", 2).unwrap_or(Value::Null))
-                                })
-                        })
-                        .sum();
-                    if sum >= obj.claim_zat {
-                        checks.push(row_ok(
-                            "outputs-geq-claim",
-                            format!("sum {sum} ≥ claim {}", obj.claim_zat),
-                        ));
-                    } else {
-                        checks.push(row_reason(
-                            ReasonCode::ClaimExceedsOutputs,
-                            "outputs-geq-claim",
-                            format!("outputs sum {sum} < claim {}", obj.claim_zat),
-                        ));
-                    }
-                }
-                None => checks.push(row_slug(
-                    "wallet-shape",
-                    "outputs-geq-claim",
-                    "anchor tx found; outputs list unextractable (beta shape)",
-                )),
-            }
+            Err(e) => return Err(map_wallet_err(&e, "z_viewtransaction")),
         }
 
-        // C7 balance ≥ claim at scan time.
-        if let Some(i) = scope.account_idx {
-            match balance_of(ctx, i).await {
-                Ok((Some(bal), interp)) if bal >= obj.claim_zat => {
+        // C6 outputs ≥ claim (+ evidence rows; mined height as separate evidence).
+        if mined_ok && digest_ok {
+            if let Ok(v) = ctx.w.view_tx(&obj.anchor_txid).await {
+                if let Some(mined) = unwrap_mined_height(&v) {
                     checks.push(row_ok(
-                        "balance-at-scan",
-                        format!("{bal} ≥ claim {} ({interp})", obj.claim_zat),
+                        "mined-height-evidence",
+                        format!("minedAtHeight={mined}; window={}", obj.anchor_height),
                     ));
                 }
-                Ok((Some(bal), interp)) => checks.push(row_reason(
-                    ReasonCode::BalanceBelowClaim,
-                    "balance-at-scan",
-                    format!("{bal} < claim {} ({interp})", obj.claim_zat),
-                )),
-                Ok((None, interp)) => checks.push(row_slug(
-                    "wallet-shape",
-                    "balance-at-scan",
-                    format!("unparseable balance ({interp})"),
-                )),
-                Err(_) => checks.push(row_slug(
-                    "wallet-unreachable",
-                    "balance-at-scan",
-                    "balance probe failed",
-                )),
+                let outputs = deep_find(&v, "output", 3)
+                    .or_else(|| deep_find(&v, "outputs", 3))
+                    .and_then(|o| o.as_array().cloned());
+                match outputs {
+                    Some(outs) => {
+                        let sum: u64 = outs
+                            .iter()
+                            .filter_map(|o| {
+                                deep_find(o, "valueZat", 2)
+                                    .and_then(|z| unwrap_u64(&z))
+                                    .or_else(|| {
+                                        num_to_zat(&deep_find(o, "value", 2).unwrap_or(Value::Null))
+                                    })
+                            })
+                            .sum();
+                        if sum >= obj.claim_zat {
+                            checks.push(row_ok(
+                                "outputs-geq-claim",
+                                format!("sum {sum} ≥ claim {}", obj.claim_zat),
+                            ));
+                        } else {
+                            checks.push(row_reason(
+                                ReasonCode::ClaimExceedsOutputs,
+                                "outputs-geq-claim",
+                                format!("outputs sum {sum} < claim {}", obj.claim_zat),
+                            ));
+                        }
+                    }
+                    None => checks.push(row_slug(
+                        "wallet-shape",
+                        "outputs-geq-claim",
+                        "anchor tx found; outputs list unextractable (beta shape)",
+                    )),
+                }
+            }
+
+            // C7 balance ≥ claim at scan time.
+            if let Some(i) = scope.account_idx {
+                match balance_of(ctx, i).await {
+                    Ok((Some(bal), interp)) if bal >= obj.claim_zat => {
+                        checks.push(row_ok(
+                            "balance-at-scan",
+                            format!("{bal} ≥ claim {} ({interp})", obj.claim_zat),
+                        ));
+                    }
+                    Ok((Some(bal), interp)) => checks.push(row_reason(
+                        ReasonCode::BalanceBelowClaim,
+                        "balance-at-scan",
+                        format!("{bal} < claim {} ({interp})", obj.claim_zat),
+                    )),
+                    Ok((None, interp)) => checks.push(row_slug(
+                        "wallet-shape",
+                        "balance-at-scan",
+                        format!("unparseable balance ({interp})"),
+                    )),
+                    Err(_) => checks.push(row_slug(
+                        "wallet-unreachable",
+                        "balance-at-scan",
+                        "balance probe failed",
+                    )),
+                }
             }
         }
-    }
+    } // end scope-dependent C4–C7
 
     // C8 freshness.
     let now = zsol_types::now_epoch_secs();

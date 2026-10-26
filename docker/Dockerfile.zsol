@@ -1,7 +1,7 @@
 # zsol — build once, ship both binaries (zsol-registry, zsol-mcp).
-# Build with cache mounts so repeated builds are fast; runtime is slim.
+# No BuildKit needed (plain legacy builder). Runtime is slim.
 #
-#   docker build -f docker/Dockerfile.zsol -t zsol:local --build-arg PROFILE=release .
+#   docker build -f docker/Dockerfile.zsol -t zsol:local .
 #
 # The zsol contract is 0-mock: only the workspace sources + Cargo manifests go
 # in; nothing outside the repo is fetched at build time (deps via cargo lock).
@@ -11,17 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libs
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# Layer-cached dependency prebuild: recompiles fast when only src/ changes.
+# Dependency prebuild on stub sources: caches axum/reqwest/tokio/blake2/etc.
+# into the (non-cache-mounted) /src/target so the REAL build only compiles
+# workspace code. After copying real sources back in, mtimes are refreshed —
+# otherwise cargo keeps the STUB artifacts as "fresh" (layer mtimes are older).
 RUN mkdir -p crates/zsol-types/src crates/zsol-wallet/src crates/zsol-registry/src crates/zsol-mcp/src \
     && echo "" > crates/zsol-types/src/lib.rs \
     && echo "" > crates/zsol-wallet/src/lib.rs \
     && echo "" > crates/zsol-registry/src/lib.rs \
     && echo "" > crates/zsol-mcp/src/lib.rs \
-    && for m in zsol-types zsol-wallet zsol-registry zsol-mcp; do \
-         find crates/$m/tests -type f -delete 2>/dev/null || true; done \
     && cargo build --release -p zsol-registry -p zsol-mcp || true
 COPY crates ./crates
-RUN cargo build --release -p zsol-registry -p zsol-mcp
+RUN find crates -type f -exec touch {} + && cargo build --release -p zsol-registry -p zsol-mcp
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
