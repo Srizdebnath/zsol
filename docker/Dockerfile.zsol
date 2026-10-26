@@ -7,11 +7,21 @@
 # in; nothing outside the repo is fetched at build time (deps via cargo lock).
 FROM rust:1.98-slim AS build
 WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
-    cargo build --release -p zsol-registry -p zsol-mcp
+# Layer-cached dependency prebuild: recompiles fast when only src/ changes.
+RUN mkdir -p crates/zsol-types/src crates/zsol-wallet/src crates/zsol-registry/src crates/zsol-mcp/src \
+    && echo "" > crates/zsol-types/src/lib.rs \
+    && echo "" > crates/zsol-wallet/src/lib.rs \
+    && echo "" > crates/zsol-registry/src/lib.rs \
+    && echo "" > crates/zsol-mcp/src/lib.rs \
+    && for m in zsol-types zsol-wallet zsol-registry zsol-mcp; do \
+         find crates/$m/tests -type f -delete 2>/dev/null || true; done \
+    && cargo build --release -p zsol-registry -p zsol-mcp || true
+COPY crates ./crates
+RUN cargo build --release -p zsol-registry -p zsol-mcp
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
