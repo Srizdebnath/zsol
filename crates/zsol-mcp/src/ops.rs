@@ -593,6 +593,7 @@ fn finalize_anchor(ctx: &ToolCtx, rec: AnchorRecord) -> Result<Value, ToolError>
         .map_err(|_| ToolError::slug("internal", "state lock poisoned"))? = Some(rec.clone());
     okv(json!({
         "txid": rec.txid,
+        "attestAccount": rec.account_idx,
         "windowHeight": rec.memo_height,
         "minedAtHeight": rec.mined_height,
         "heightSource": rec.height_source,
