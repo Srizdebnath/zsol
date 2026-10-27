@@ -1,0 +1,90 @@
+{
+  "chain": {
+    "chainName": "test",
+    "consensusBranchId": "77190ad9",
+    "endpoint": "testnet.zec.rocks:443",
+    "tipHeight": 4544963,
+    "vendor": "ECC LightWalletD",
+    "version": "v0.5.4"
+  },
+  "report": {
+    "agentId": "agent-a",
+    "anchorTxid": "30f12fbd02f03b18efff3114b7a6e4e9a4fd9ad32f714c3e774eba78f0706569",
+    "anchoredZat": 89980000,
+    "checks": [
+      {
+        "check": "C1 protocol",
+        "code": "ok",
+        "detail": "zsol/0.2 on test pool ironwood",
+        "ok": true
+      },
+      {
+        "check": "C2 anchor mined",
+        "code": "ok",
+        "detail": "mined at 4544949, 15 confirmations",
+        "ok": true
+      },
+      {
+        "check": "C3 spend authority",
+        "code": "ok",
+        "detail": "anchor spends 1 note(s) owned by the shared account",
+        "ok": true
+      },
+      {
+        "check": "C4 binding",
+        "code": "ok",
+        "detail": "memo 0xFF‖zs02‖ba3b7162… matches the recomputed frame digest",
+        "ok": true
+      },
+      {
+        "check": "C5 value",
+        "code": "ok",
+        "detail": "89980000 zat anchored ≥ 5000000 claimed",
+        "ok": true
+      },
+      {
+        "check": "C6 liveness",
+        "code": "ok",
+        "detail": "2 anchored note(s) unspent at height 4544963",
+        "ok": true
+      },
+      {
+        "check": "C7 freshness",
+        "code": "ok",
+        "detail": "issued 608s ago, horizon 24h",
+        "ok": true
+      },
+      {
+        "check": "C8 presentation",
+        "code": "ok",
+        "detail": "Ed25519 signature by sessionKey over this verifier's nonce",
+        "ok": true
+      }
+    ],
+    "claimZat": 5000000,
+    "notes": [
+      {
+        "binding": false,
+        "outputIndex": 0,
+        "pool": "ironwood",
+        "spentHeight": null,
+        "spentInTxid": null,
+        "valueZat": 84980000
+      },
+      {
+        "binding": true,
+        "outputIndex": 1,
+        "pool": "ironwood",
+        "spentHeight": null,
+        "spentInTxid": null,
+        "valueZat": 5000000
+      }
+    ],
+    "reasons": [],
+    "scannedHeight": 4544963,
+    "tier": "verified",
+    "tipHeight": 4544963,
+    "verifiedAt": 1793042206
+  },
+  "seconds": 8
+}
