@@ -36,6 +36,9 @@ pub enum RegistryReject {
     Malformed(String),
     #[error("non-canonical object bytes")]
     NonCanonical,
+    /// SPEC §9 / SRS FR-4.2: the registry never accepts anything named like a key.
+    #[error("key-like field {0:?} refused: the registry never carries keys")]
+    KeyLikeField(String),
     #[error("{0}")]
     Reason(ReasonCode),
     #[error("duplicate (agentId, anchorTxid); existing entry {entry_id}")]
@@ -64,6 +67,10 @@ impl RegistryReject {
                 json!({"error": "malformed", "detail": d}),
             ),
             Self::NonCanonical => (StatusCode::BAD_REQUEST, json!({"error": "non-canonical"})),
+            Self::KeyLikeField(f) => (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "key-like-field", "field": f}),
+            ),
             Self::Reason(rc) => (
                 StatusCode::BAD_REQUEST,
                 json!({"error": "reject", "reason": rc.as_str()}),
@@ -177,7 +184,50 @@ fn genesis() -> [u8; 32] {
 
 /// Core publish logic (SPEC §7 acceptance order): decode → parse → canonicalize →
 /// validate → dedupe → chain-append. All inside one IMMEDIATE transaction.
+/// Field names that denote key material (SPEC §9: `ufvk`, `uivk`, `seed`, `sk`, plus common
+/// spellings of spending keys / mnemonics). Compared case-insensitively with `_`/`-` removed.
+const KEY_LIKE_FIELDS: &[&str] = &[
+    "ufvk",
+    "uivk",
+    "seed",
+    "seedphrase",
+    "mnemonic",
+    "sk",
+    "usk",
+    "spendingkey",
+    "viewingkey",
+    "privatekey",
+];
+
+fn is_key_like(name: &str) -> bool {
+    let norm: String = name
+        .chars()
+        .filter(|c| *c != '_' && *c != '-')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    KEY_LIKE_FIELDS.contains(&norm.as_str())
+}
+
+/// First key-like field name anywhere in `v` (objects and arrays are walked recursively).
+fn find_key_like(v: &Value) -> Option<String> {
+    match v {
+        Value::Object(m) => m.iter().find_map(|(k, child)| {
+            if is_key_like(k) {
+                Some(k.clone())
+            } else {
+                find_key_like(child)
+            }
+        }),
+        Value::Array(items) => items.iter().find_map(find_key_like),
+        _ => None,
+    }
+}
+
 pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published, RegistryReject> {
+    // FR-4.2: refuse key-like fields in the envelope before anything else is looked at.
+    if let Some(f) = find_key_like(&body) {
+        return Err(RegistryReject::KeyLikeField(f));
+    }
     let obj_field = body
         .as_object()
         .and_then(|m| m.get("object"))
@@ -188,6 +238,16 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(obj_field)
         .map_err(|e| RegistryReject::Malformed(format!("b64u decode: {e}")))?;
+
+    // FR-4.2 inside the object too (serde's deny_unknown_fields would also refuse it, but
+    // as a generic malformed error; this names the offending field).
+    if let Some(f) = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .as_ref()
+        .and_then(find_key_like)
+    {
+        return Err(RegistryReject::KeyLikeField(f));
+    }
 
     let object: AttestationObject = serde_json::from_slice(&bytes)
         .map_err(|e| RegistryReject::Malformed(format!("object json: {e}")))?;
@@ -964,5 +1024,91 @@ mod tests {
         // ~0.6 s at 2/s ≈ 1 token back
         std::thread::sleep(std::time::Duration::from_millis(600));
         assert!(matches!(rl.check("ip-1"), LimitDecision::Allowed));
+    }
+
+    /// POST through the real router (all FR-3.4 layers) without binding a socket.
+    async fn post_http(body: Value) -> (StatusCode, Value) {
+        use tower::ServiceExt as _;
+        let state = AppState {
+            db: Arc::new(Mutex::new(open_mem())),
+        };
+        let mut req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v0/attestations")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                1,
+            ))));
+        let resp = router(state, Limits::default()).oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    /// FR-4.2 AC: a POST containing a `ufvk` field returns 400 (and nothing is stored).
+    #[tokio::test]
+    async fn ac_fr42_post_with_ufvk_is_400() {
+        let o = sample("agent-1", &"a".repeat(64), 1_769_337_600);
+        // control: the clean envelope is accepted
+        let (status, _) = post_http(body_of(&o)).await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        let mut body = body_of(&o);
+        body["ufvk"] = json!("uviewtest1qqqq");
+        let (status, reply) = post_http(body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(reply["error"], "key-like-field");
+        assert_eq!(reply["field"], "ufvk");
+    }
+
+    /// FR-4.2 / SPEC §9: every key-like name is refused with 400, at any depth and in
+    /// either envelope or object, case/separator-insensitively; nothing is appended.
+    #[tokio::test]
+    async fn ac_fr42_key_like_fields_rejected() {
+        let o = sample("agent-1", &"b".repeat(64), 1_769_337_600);
+        for name in [
+            "ufvk",
+            "uivk",
+            "seed",
+            "sk",
+            "spendingKey",
+            "spending_key",
+            "USK",
+            "mnemonic",
+        ] {
+            let mut top = body_of(&o);
+            top[name] = json!("x");
+            let (status, reply) = post_http(top).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "top-level {name}");
+            assert_eq!(reply["error"], "key-like-field", "top-level {name}");
+
+            let nested = json!({"object": o.b64u().unwrap(), "meta": [{name: "x"}]});
+            let (status, _) = post_http(nested).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "nested {name}");
+        }
+
+        // smuggled inside the b64u object itself
+        let mut inner = serde_json::to_value(&o).unwrap();
+        inner["ufvk"] = json!("uviewtest1qqqq");
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&inner).unwrap());
+        let mut c = open_mem();
+        let err = publish(&mut c, json!({"object": b64}), 111).unwrap_err();
+        assert!(matches!(err, RegistryReject::KeyLikeField(ref f) if f == "ufvk"));
+        assert_eq!(err.wire().0, StatusCode::BAD_REQUEST);
+        assert_eq!(health(&c).unwrap().chain_length, 0, "nothing stored");
+
+        // a legitimate field that merely contains "key" (sessionKey) is NOT key-like
+        assert!(!is_key_like("sessionKey"));
+        assert!(!is_key_like("anchorTxid"));
     }
 }

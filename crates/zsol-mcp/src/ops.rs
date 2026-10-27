@@ -80,6 +80,11 @@ fn env(k: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// FR-5.2: only the exact value "1" enables broadcasting; unset (the default run) never does.
+fn allow_spend_from(v: Option<&str>) -> bool {
+    v == Some("1")
+}
+
 impl ToolCtx {
     pub fn from_env() -> Result<Arc<Self>, String> {
         let wallet_dir =
@@ -102,7 +107,7 @@ impl ToolCtx {
             registry_url: env("ZSOL_REGISTRY_URL").map(|s| s.trim_end_matches('/').to_string()),
             credit_url: env("ZSOL_CREDIT_URL").map(|s| s.trim_end_matches('/').to_string()),
             verifier_id,
-            allow_spend: env("ZSOL_ALLOW_SPEND").as_deref() == Some("1"),
+            allow_spend: allow_spend_from(env("ZSOL_ALLOW_SPEND").as_deref()),
             spend_cap_zat: env("ZSOL_SPEND_CAP_ZAT")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(10_000_000),
@@ -132,13 +137,22 @@ impl ToolCtx {
         Ok(g)
     }
 
-    fn spend_gate(&self, zat: u64) -> Result<(), ToolError> {
+    /// FR-5.2 first half: refuses unless ZSOL_ALLOW_SPEND=1. Broadcasting tools whose amount
+    /// is only known after opening the wallet (or asking the desk) call this up front, so the
+    /// default run never touches the wallet or the network.
+    fn spend_enabled_gate(&self) -> Result<(), ToolError> {
         if !self.allow_spend {
             return Err(ToolError::slug(
                 "spend-disabled",
                 "this gateway runs without ZSOL_ALLOW_SPEND=1; no transaction was built",
             ));
         }
+        Ok(())
+    }
+
+    /// FR-5.2: spend enabled AND `zat` within ZSOL_SPEND_CAP_ZAT.
+    fn spend_gate(&self, zat: u64) -> Result<(), ToolError> {
+        self.spend_enabled_gate()?;
         if zat > self.spend_cap_zat {
             return Err(ToolError::slug(
                 "spend-cap",
@@ -149,6 +163,36 @@ impl ToolCtx {
             ));
         }
         Ok(())
+    }
+}
+
+/// Test-only constructor: no env reads, nothing opened. The wallet dir does not exist and the
+/// endpoints point at a closed localhost port, so any tool that got past its gate would fail
+/// loudly instead of touching a real wallet or network.
+#[cfg(test)]
+impl ToolCtx {
+    pub(crate) fn offline(allow_spend: bool, spend_cap_zat: u64) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            wallet_dir: std::env::temp_dir().join(format!(
+                "zsol-mcp-test-absent-wallet-{}",
+                std::process::id()
+            )),
+            lwd: "127.0.0.1:9".into(),
+            network: "test".into(),
+            registry_url: None,
+            credit_url: Some("http://127.0.0.1:9".into()),
+            verifier_id: "test-verifier".into(),
+            allow_spend,
+            spend_cap_zat,
+            min_conf: 1,
+            session: Mutex::new(None),
+        }
+    }
+
+    /// True when no wallet/chain session was ever opened.
+    pub(crate) async fn session_unopened(&self) -> bool {
+        self.session.lock().await.is_none()
     }
 }
 
@@ -400,6 +444,7 @@ pub async fn credit_request(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolEr
 }
 
 pub async fn credit_repay(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
+    ctx.spend_enabled_gate()?;
     let base = ctx.credit_url.clone().ok_or(ToolError::slug(
         "credit-unconfigured",
         "ZSOL_CREDIT_URL not set",
@@ -445,6 +490,7 @@ pub async fn credit_repay(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolErro
 /// Ends this wallet's attestations by moving the zsol-attn balance to commerce (SPEC §8:
 /// withdrawal is the attestor's revocation primitive; every watching verifier sees it).
 pub async fn release(ctx: &ToolCtx) -> Result<Value, ToolError> {
+    ctx.spend_enabled_gate()?;
     let mut g = ctx.session().await?;
     let (w, c) = g.as_mut().expect("session");
     w.sync(c).await?;
@@ -532,4 +578,77 @@ pub async fn registry_fetch(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolEr
     Ok(
         json!({"agentId": agent_id, "entries": rows, "note": "chainOk recomputed locally per SPEC §9"}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slug(r: Result<(), ToolError>) -> Option<&'static str> {
+        r.err().and_then(|e| e.slug)
+    }
+
+    /// FR-5.2: ZSOL_ALLOW_SPEND unset ⇒ spend-disabled, whatever the amount.
+    #[test]
+    fn spend_gate_disabled_by_default() {
+        let ctx = ToolCtx::offline(false, 10_000_000);
+        assert_eq!(slug(ctx.spend_gate(0)), Some("spend-disabled"));
+        assert_eq!(slug(ctx.spend_gate(1)), Some("spend-disabled"));
+        assert_eq!(slug(ctx.spend_gate(u64::MAX)), Some("spend-disabled"));
+        assert_eq!(slug(ctx.spend_enabled_gate()), Some("spend-disabled"));
+    }
+
+    /// FR-5.2: allowed but over the cap ⇒ spend-cap; at or under the cap ⇒ Ok.
+    #[test]
+    fn spend_gate_cap() {
+        let ctx = ToolCtx::offline(true, 10_000_000);
+        assert_eq!(slug(ctx.spend_gate(10_000_001)), Some("spend-cap"));
+        assert_eq!(slug(ctx.spend_gate(u64::MAX)), Some("spend-cap"));
+        assert!(ctx.spend_gate(10_000_000).is_ok());
+        assert!(ctx.spend_gate(1).is_ok());
+        assert!(ctx.spend_enabled_gate().is_ok());
+    }
+
+    /// FR-5.2 AC "the default run cannot send": the ZSOL_ALLOW_SPEND parsing rule used by
+    /// `from_env` (asserted on the rule, not by mutating process env).
+    #[test]
+    fn allow_spend_requires_exact_one() {
+        assert!(!allow_spend_from(None), "unset must not allow spending");
+        for v in ["0", "true", "yes", "TRUE", "01", "2"] {
+            assert!(!allow_spend_from(Some(v)), "{v:?}");
+        }
+        assert!(allow_spend_from(Some("1")));
+    }
+
+    /// Each broadcasting tool refuses before opening a wallet or contacting anything.
+    #[tokio::test]
+    async fn broadcasting_tools_refuse_when_disabled() {
+        let ctx = ToolCtx::offline(false, 10_000_000);
+        let e = anchor(&ctx, &json!({"agentId": "a", "claimZat": 1_000_000}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.slug, Some("spend-disabled"));
+        let e = credit_repay(&ctx, &json!({"loanId": "00"}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.slug, Some("spend-disabled"));
+        let e = release(&ctx).await.unwrap_err();
+        assert_eq!(e.slug, Some("spend-disabled"));
+        assert!(
+            ctx.session_unopened().await,
+            "no wallet/chain session opened"
+        );
+        assert!(!ctx.wallet_dir.exists());
+    }
+
+    /// zsol_anchor over the cap is refused before any wallet/chain work.
+    #[tokio::test]
+    async fn anchor_over_cap_refused() {
+        let ctx = ToolCtx::offline(true, 1_000);
+        let e = anchor(&ctx, &json!({"agentId": "a", "claimZat": 1_001}))
+            .await
+            .unwrap_err();
+        assert_eq!(e.slug, Some("spend-cap"));
+        assert!(ctx.session_unopened().await);
+    }
 }

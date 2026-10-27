@@ -188,3 +188,36 @@ pub async fn dispatch_value(ctx: &ToolCtx, v: &Value) -> Vec<Value> {
         Err((code, msg)) => vec![error(&Value::Null, code, msg)],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FR-5.2 at the MCP dispatch level: `tools/call zsol_release` on a default (spend
+    /// disabled) gateway is an isError result carrying `spend-disabled`, and no wallet or
+    /// chain session is opened.
+    #[tokio::test]
+    async fn tools_call_release_refused_when_spend_disabled() {
+        let ctx = ToolCtx::offline(false, 10_000_000);
+        for tool in ["zsol_release", "credit_repay", "zsol_anchor"] {
+            let req = json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": tool,
+                    "arguments": {"loanId": "00", "agentId": "a", "claimZat": 1_000_000},
+                },
+            });
+            let out = dispatch_value(&ctx, &req).await;
+            assert_eq!(out.len(), 1, "{tool}");
+            let res = &out[0]["result"];
+            assert_eq!(res["isError"], true, "{tool}");
+            let inner: Value =
+                serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(inner["reason"], "spend-disabled", "{tool}");
+        }
+        assert!(ctx.session_unopened().await);
+        assert!(!ctx.wallet_dir.exists());
+    }
+}
