@@ -1,0 +1,65 @@
+flowchart TB
+    subgraph BOR["Borrower agent process"]
+        CL["Claude agent"]
+        MCP["zsol-mcp<br/>stdio or HTTP"]
+        LW["zsol-lightwallet"]
+        SEED[("seed.age<br/>age-encrypted seed")]
+        COM["Account commerce<br/>payments and repayments"]
+        ATT["Account zsol-attn<br/>funding and anchors only"]
+        NEV["Never leaves this box:<br/>seed, spending keys,<br/>commerce viewing key"]
+        CL -->|"MCP tools"| MCP
+        MCP --> LW
+        LW --> SEED
+        LW --> COM
+        LW --> ATT
+    end
+
+    subgraph DESK["Credit Desk process"]
+        CR["zsol-credit<br/>HTTP :8090"]
+        VER["zsol-verifier<br/>view-only UFVK import"]
+        TRE["Account treasury<br/>receives repayments"]
+        LOANS[("loans.sqlite<br/>loans and events")]
+        POL["credit-policy.json<br/>mode test, LTV 50%"]
+        CR --> VER
+        CR --> TRE
+        CR --> LOANS
+        CR --> POL
+    end
+
+    subgraph REG["Public registry"]
+        RS["zsol-registry<br/>HTTP :8088"]
+        RDB[("Claims and digest chain<br/>no keys, no balances")]
+        RS --> RDB
+    end
+
+    subgraph GW["Public verifier gateway"]
+        GWM["zsol-mcp, verifier role<br/>own view-only wallet"]
+    end
+
+    subgraph WEB["Web, Next.js"]
+        W1["Status page<br/>route /"]
+        W2["Registry explorer<br/>/explorer"]
+        W3["Live loan board<br/>/desk"]
+        W4["Judge self-serve<br/>/verify"]
+    end
+
+    subgraph ZC["Zcash testnet"]
+        LWD["lightwalletd<br/>testnet.zec.rocks:443"]
+        NET["NU7 active<br/>branch 0x77190ad9"]
+        LWD --- NET
+    end
+
+    BR["Bitrefill API v2<br/>test products, pay from balance"]
+    JUDGE["Judge or observer"]
+
+    MCP -->|"object + UFVK of zsol-attn<br/>+ signed challenge, direct"| CR
+    MCP -->|"claim object only"| RS
+    CR -->|"invoice and code"| BR
+    LW -->|"compact blocks, send tx"| LWD
+    VER -->|"sync from birthday"| LWD
+    GWM -->|"sync"| LWD
+    CR -->|"SSE /v0/events"| W3
+    W2 -->|"fetch claims"| RS
+    W4 -->|"relay zsol_verify"| GWM
+    JUDGE --> W4
+    JUDGE --> W2
