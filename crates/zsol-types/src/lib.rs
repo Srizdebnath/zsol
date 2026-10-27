@@ -3,6 +3,9 @@
 //! Amounts are zatoshi integers everywhere (SPEC P6). Primitives are standard only (SPEC P3):
 //! BLAKE2b-256 (RFC 7693, personalised), Ed25519 (RFC 8032), ZIP-302 memos, b64u transport.
 
+// SRS FR-1.5: reason codes and tiers are matched exhaustively, never with `_`.
+#![deny(clippy::wildcard_enum_match_arm)]
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64U;
 use base64::Engine as _;
 use blake2::digest::consts::U32;
@@ -440,7 +443,10 @@ fn sort_json(v: &mut serde_json::Value) {
             }
         }
         serde_json::Value::Array(a) => a.iter_mut().for_each(sort_json),
-        _ => {}
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
     }
 }
 

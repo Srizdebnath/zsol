@@ -1,6 +1,6 @@
 # zsol: Software Requirements Specification
 
-**Version:** 2.0 (2026-10-26) · **Supersedes:** 1.0 (see [`FINDINGS.md`](FINDINGS.md))
+**Version:** 2.1 (2026-10-27: FR-1.5, 5.1, 6.2, 7.3, NF-1 aligned with the implementation) · 2.0 (2026-10-26) · **Supersedes:** 1.0 (see [`FINDINGS.md`](FINDINGS.md))
 **Companions:** [`SPEC.md`](SPEC.md) (wire protocol 0.2) · [`ARCHITECTURE.md`](ARCHITECTURE.md) ·
 [`BUILD_PLAN.md`](BUILD_PLAN.md) · [`OPERATIONS.md`](OPERATIONS.md)
 
@@ -46,7 +46,7 @@ an unbroadcast PCZT proof), cross-pool aggregation, a hosted VPS.
 - **FR-1.4** Presentation message and Ed25519 sign/verify (SPEC §7). *AC:* RFC 8032 test vector
   passes; a tampered nonce, txid or verifierId each fail.
 - **FR-1.5** Reason codes (SPEC §10) and tiers as exhaustive enums. *AC:* no wildcard match arms
-  (clippy `wildcard_enum_match_arm` denied).
+  (clippy `wildcard_enum_match_arm` denied in `zsol-types`, where the enums live).
 
 ### FR-2 Light wallet backend (`zsol-lightwallet`), primary
 - **FR-2.1** Chain client against a lightwalletd-protocol endpoint (TLS). At boot it checks
@@ -83,10 +83,15 @@ an unbroadcast PCZT proof), cross-pool aggregation, a hosted VPS.
 - **FR-4.2** Reject key-like fields. *AC:* a POST containing a `ufvk` field returns 400.
 
 ### FR-5 MCP gateway (`zsol-mcp`)
-- **FR-5.1** Tools. Attestor side: `zsol_health`, `zsol_wallet_status`, `zsol_receive_address`,
-  `zsol_anchor`, `zsol_make_attestation`, `zsol_publish`, `zsol_share_ufvk`, `zsol_sign_challenge`.
-  Verifier side: `zsol_challenge`, `zsol_verify`, `zsol_watch_status`, `zsol_registry_fetch`.
-  *AC:* `claude mcp list` shows all of them over stdio and over HTTP.
+- **FR-5.1** Tools. Both sides: `zsol_health`, `zsol_registry_fetch`. Attestor side:
+  `zsol_wallet_status` (balances + shielded receive addresses), `zsol_anchor` (broadcasts the
+  self-spend and returns the finished object), `zsol_attestations`, `zsol_publish`,
+  `zsol_present` (signs a challenge and discloses the `zsol-attn` UFVK to that verifier only),
+  `zsol_release`, `credit_request`, `credit_repay`. Verifier side: `zsol_challenge`,
+  `zsol_verify`, `zsol_watch`. *AC:* `claude mcp list` shows all of them over stdio and over HTTP.
+  (v2.1: names follow the implementation; `zsol_make_attestation` is folded into `zsol_anchor`,
+  `zsol_share_ufvk` + `zsol_sign_challenge` into `zsol_present`, so a UFVK is never released
+  without a fresh, verifier-bound challenge.)
 - **FR-5.2** Spend tools refuse unless `ZSOL_ALLOW_SPEND=1` and the requested amount is within
   `ZSOL_SPEND_CAP_ZAT`. *AC:* the default run cannot send.
 
@@ -95,7 +100,9 @@ an unbroadcast PCZT proof), cross-pool aggregation, a hosted VPS.
   `credit_request` and `credit_repay`. *AC:* a borrower agent completes a loan with no human
   steps beyond spend approval.
 - **FR-6.2** Policy file: `ltvBps`, `maxTenorBlocks`, `maxLoanUsd`, `mode` (`test` | `live`),
-  reference-rate source. *AC:* the policy is loaded and echoed in `/v0/health`.
+  `rateMaxAgeSecs`. Reference rate: CoinGecko ZEC/USD, falling back to Kraken; the source and
+  timestamp are stored on every loan (`rateSource`, `rateAt`). *AC:* the policy is loaded and
+  echoed in `/v0/health`.
 - **FR-6.3** Bitrefill client (REST v2 with Bearer key; MCP as an alternative). In test mode it
   allows only `test-gift-card-code`, `test-gift-card-link` and `test-phone-refill` with
   `payment_method=balance`. *AC:* a real Bitrefill invoice ID and redemption payload are stored;
@@ -108,8 +115,11 @@ an unbroadcast PCZT proof), cross-pool aggregation, a hosted VPS.
 ### FR-7 Web (`web/`, Next.js 16, neobrutalism)
 - **FR-7.1** `/` shows stack status (endpoint, branch, tip, sync lag of each wallet).
 - **FR-7.2** `/explorer` lists registry entries with the chain digest recomputed client-side.
-- **FR-7.3** `/verify` is a judge self-serve page: paste an object + UFVK and the server-side
-  verifier runs C1–C7. C8 is shown as "requires the attestor's live presentation".
+- **FR-7.3** `/verify` is a judge self-serve page: it requests a fresh challenge from the public
+  verifier gateway, the attestor answers it (`zsol_present`), and the judge pastes the
+  presentation; the gateway runs C1–C8 in its own view-only wallet. (v2.1: replaces "paste object
+  + UFVK, C1–C7" — with a live challenge C8 is checkable too, and a pasted UFVK alone could be a
+  replay.)
 - **FR-7.4** `/desk` shows a live loan board and watch events (SSE), with a link to every txid
   on an explorer.
 - *AC (all):* every number on screen traces to a live endpoint; `no-mocks.sh` passes.
@@ -125,7 +135,8 @@ an unbroadcast PCZT proof), cross-pool aggregation, a hosted VPS.
 
 ## 4. Non-functional requirements
 - **NF-1** An anchor reaches 1 confirmation in ≤ 90 s at p95 on post-NU7 testnet (25 s target
-  spacing). Measured values go into the evidence.
+  spacing). Measured values go into the evidence. (Measured so far: 126 s and 157 s from command to
+  mined, release build, public lightwalletd — currently **not met**; see TODOS.)
 - **NF-2** Verifier cold check (import plus sync from birthday) ≤ 60 s for a birthday ≤ 2,000
   blocks old. Measured.
 - **NF-3** No address, amount, key or memo in info-level logs; debug output is gated.

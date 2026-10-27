@@ -45,7 +45,8 @@ Candidate on-day features, chosen on Nov 3 according to what is finished:
 1. `/` shows the stack is live: branch `0x77190ad9`, tip height.
 2. Agent A: "I need a gift card, I only have ZEC." It anchors (≈25 s) and requests credit.
 3. `/desk`: C1–C8 rows turn green → Bitrefill invoice ID → redemption delivered.
-4. Agent B2 (unfunded) requests credit → `claim-only` with reason codes.
+4. An agent whose proof is no longer backed (released, or over-claimed) requests credit →
+   `claim-only` with reason codes and no invoice (live: `evidence/G5b-claim-only.md`).
 5. A spends its anchored notes → the watch emits `released` → the loan goes `at-risk` (red)
    within one block.
 6. A repays from `commerce` → `repaid`. Every step links to its txid.
