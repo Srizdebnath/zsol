@@ -25,14 +25,17 @@ fn spec_text() -> String {
 fn actual_field_names() -> Vec<String> {
     let o = AttestationObject {
         protocol: PROTOCOL.into(),
+        network: "test".into(),
         agent_id: "x".into(),
         claim_zat: 1,
-        anchor_height: 1,
-        anchor_txid: "x".into(),
-        account_ua: "x".into(),
-        memo_binding: "x".into(),
+        pool: "ironwood".into(),
+        session_key: "x".into(),
+        birthday: 1,
         issued_at: 1,
         max_age_hours: 1,
+        anchor_txid: "x".into(),
+        anchor_height: 1,
+        memo_binding: "x".into(),
     };
     let v = serde_json::to_value(&o).unwrap();
     match v {
@@ -47,7 +50,7 @@ fn spec_section4_lists_every_wire_field() {
     let names = actual_field_names();
     assert_eq!(
         names.len(),
-        9,
+        12,
         "unexpected field count; update SPEC §4 table too"
     );
     for name in &names {
@@ -61,19 +64,26 @@ fn spec_section4_lists_every_wire_field() {
 #[test]
 fn spec_pins_frame_digest_exclusions_and_memo_layout() {
     let spec = spec_text();
-    // §4 amendment: frame digest excludes all three later-known fields.
-    {
-        let token = "memoBinding, anchorTxid, anchorHeight";
+    // §4: the frame excludes exactly the three post-broadcast fields.
+    let frame_line = spec
+        .lines()
+        .find(|l| l.contains("**Frame**"))
+        .expect("SPEC §4 must define the Frame");
+    for k in zsol_types::FRAME_EXCLUDED {
         assert!(
-            spec.contains(token),
-            "SPEC.md drift: frame-digest exclusion set {token:?} not documented"
+            frame_line.contains(k),
+            "SPEC.md drift: frame exclusion {k:?} not documented"
         );
     }
-    // §5 memo layout: zs01(4)‖ver(1)‖height_LE64(8)‖digest(32)
-    for token in ["zs01(4)", "ver(1)", "height_LE64(8)", "digest(32)"] {
+    // §4 digest personalisation and §5 memo layout.
+    for token in [
+        r#""zsol/0.2-frame\0\0""#,
+        r#"0xFF ‖ "zs02" ‖ D"#,
+        r#""zsol/0.2-present""#,
+    ] {
         assert!(
             spec.contains(token),
-            "SPEC.md drift: memo layout token {token:?} not documented"
+            "SPEC.md drift: token {token:?} not documented"
         );
     }
 }

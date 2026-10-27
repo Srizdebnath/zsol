@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use zsol_types::{chain_digest, AttestationObject, ReasonCode, ZsolError};
+use zsol_types::{chain_digest, AttestationObject, ReasonCode};
 
 /// Transport-level rejection slugs (distinct from SPEC §9 status codes, which are
 /// attestation-verification semantics; §9 codes are reused where the taxonomy has one).
@@ -36,6 +36,9 @@ pub enum RegistryReject {
     Malformed(String),
     #[error("non-canonical object bytes")]
     NonCanonical,
+    /// SPEC §9 / SRS FR-4.2: the registry never accepts anything named like a key.
+    #[error("key-like field {0:?} refused: the registry never carries keys")]
+    KeyLikeField(String),
     #[error("{0}")]
     Reason(ReasonCode),
     #[error("duplicate (agentId, anchorTxid); existing entry {entry_id}")]
@@ -64,6 +67,10 @@ impl RegistryReject {
                 json!({"error": "malformed", "detail": d}),
             ),
             Self::NonCanonical => (StatusCode::BAD_REQUEST, json!({"error": "non-canonical"})),
+            Self::KeyLikeField(f) => (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "key-like-field", "field": f}),
+            ),
             Self::Reason(rc) => (
                 StatusCode::BAD_REQUEST,
                 json!({"error": "reject", "reason": rc.as_str()}),
@@ -177,7 +184,50 @@ fn genesis() -> [u8; 32] {
 
 /// Core publish logic (SPEC §7 acceptance order): decode → parse → canonicalize →
 /// validate → dedupe → chain-append. All inside one IMMEDIATE transaction.
+/// Field names that denote key material (SPEC §9: `ufvk`, `uivk`, `seed`, `sk`, plus common
+/// spellings of spending keys / mnemonics). Compared case-insensitively with `_`/`-` removed.
+const KEY_LIKE_FIELDS: &[&str] = &[
+    "ufvk",
+    "uivk",
+    "seed",
+    "seedphrase",
+    "mnemonic",
+    "sk",
+    "usk",
+    "spendingkey",
+    "viewingkey",
+    "privatekey",
+];
+
+fn is_key_like(name: &str) -> bool {
+    let norm: String = name
+        .chars()
+        .filter(|c| *c != '_' && *c != '-')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    KEY_LIKE_FIELDS.contains(&norm.as_str())
+}
+
+/// First key-like field name anywhere in `v` (objects and arrays are walked recursively).
+fn find_key_like(v: &Value) -> Option<String> {
+    match v {
+        Value::Object(m) => m.iter().find_map(|(k, child)| {
+            if is_key_like(k) {
+                Some(k.clone())
+            } else {
+                find_key_like(child)
+            }
+        }),
+        Value::Array(items) => items.iter().find_map(find_key_like),
+        _ => None,
+    }
+}
+
 pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published, RegistryReject> {
+    // FR-4.2: refuse key-like fields in the envelope before anything else is looked at.
+    if let Some(f) = find_key_like(&body) {
+        return Err(RegistryReject::KeyLikeField(f));
+    }
     let obj_field = body
         .as_object()
         .and_then(|m| m.get("object"))
@@ -188,6 +238,16 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(obj_field)
         .map_err(|e| RegistryReject::Malformed(format!("b64u decode: {e}")))?;
+
+    // FR-4.2 inside the object too (serde's deny_unknown_fields would also refuse it, but
+    // as a generic malformed error; this names the offending field).
+    if let Some(f) = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .as_ref()
+        .and_then(find_key_like)
+    {
+        return Err(RegistryReject::KeyLikeField(f));
+    }
 
     let object: AttestationObject = serde_json::from_slice(&bytes)
         .map_err(|e| RegistryReject::Malformed(format!("object json: {e}")))?;
@@ -201,12 +261,13 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
     }
 
     // Structural floors (§9 codes reused where the taxonomy has one).
-    object.validate().map_err(|e| match e {
-        ZsolError::Claim(rc) => RegistryReject::Reason(rc),
-        ZsolError::Json => RegistryReject::Malformed("object json".into()),
-        ZsolError::Base64 => RegistryReject::Malformed("object b64u".into()),
-        other => RegistryReject::Malformed(format!("{other}")),
-    })?;
+    // Structural floors (SPEC §6 C1 codes). Unknown fields — e.g. a smuggled `ufvk` — were
+    // already refused by serde (`deny_unknown_fields`), so keys can never be stored (FR-4.2).
+    let network = match object.network.as_str() {
+        n @ ("test" | "main") => n.to_string(),
+        _ => return Err(RegistryReject::Reason(ReasonCode::NetworkMismatch)),
+    };
+    object.validate(&network).map_err(RegistryReject::Reason)?;
 
     let tx = conn
         .transaction()
@@ -236,10 +297,10 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
             |r| r.get(0),
         )
         .map_err(|e| RegistryReject::Db(format!("watermark read: {e}")))?;
-    if object.anchor_height < watermark {
+    if u64::from(object.anchor_height) < watermark {
         return Err(RegistryReject::ChainDescended {
             watermark,
-            posted: object.anchor_height,
+            posted: u64::from(object.anchor_height),
         });
     }
 
@@ -289,7 +350,7 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
     .map_err(|e| RegistryReject::Db(format!("head advance: {e}")))?;
 
     // Watermark only ever advances (trigger guards the floor).
-    if object.anchor_height > watermark {
+    if u64::from(object.anchor_height) > watermark {
         tx.execute(
             "UPDATE chain_meta SET watermark_height = ?1 WHERE id = 1",
             params![object.anchor_height],
@@ -319,6 +380,9 @@ pub struct FetchEntry {
     pub seq: i64,
     pub entry_id: String,
     pub chain_digest_hex: String,
+    /// Digest of the globally-prior row (whole-chain chain is one sequence);
+    /// `None` marks the very first entry, whose prev is the zero genesis.
+    pub prev_digest_hex: Option<String>,
     pub received_at: u64,
     /// Canonical bytes exactly as stored — verifiers recompute the chain from these.
     pub object_canonical: Vec<u8>,
@@ -343,8 +407,32 @@ pub fn fetch(conn: &Connection, agent_id: &str) -> Result<FetchResult, RegistryR
         .map_err(|e| RegistryReject::Db(format!("prepare: {e}")))?;
 
     let mut entries = Vec::new();
+    // Prev-digest adjacency is GLOBAL (single chain_head row): each entry's
+    // chainDigest depends on the digest of whatever was inserted immediately
+    // before it across ALL agents. Export that adjacency so verifiers
+    // recompute the exact SPEC §7 formula instead of per-agent assumptions.
+    let mut prevs: HashMap<String, String> = HashMap::new();
+    {
+        let mut all = conn
+            .prepare("SELECT entry_id, digest FROM attestations ORDER BY seq ASC")
+            .map_err(|e| RegistryReject::Db(format!("prepare: {e}")))?;
+        let walk = all
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(|e| RegistryReject::Db(format!("rows: {e}")))?;
+        let mut prev: Option<(String, String)> = None; // (entry_id, hex digest)
+        for row in walk {
+            let (id, digest) = row.map_err(|e| RegistryReject::Db(format!("row: {e}")))?;
+            if let Some((_, ph)) = &prev {
+                prevs.insert(id.clone(), ph.clone());
+            }
+            prev = Some((id, hex::encode(digest)));
+        }
+    }
     let rows = stmt
         .query_map(params![agent_id], |r| {
+            let entry_id: String = r.get(1)?;
             let obj_bytes: Vec<u8> = r.get(4)?;
             let object: AttestationObject = serde_json::from_slice(&obj_bytes).map_err(|_| {
                 rusqlite::Error::FromSqlConversionFailure(
@@ -355,7 +443,8 @@ pub fn fetch(conn: &Connection, agent_id: &str) -> Result<FetchResult, RegistryR
             })?;
             Ok(FetchEntry {
                 seq: r.get(0)?,
-                entry_id: r.get(1)?,
+                prev_digest_hex: prevs.get(&entry_id).cloned(),
+                entry_id,
                 chain_digest_hex: hex::encode({
                     let d: Vec<u8> = r.get(2)?;
                     d
@@ -612,6 +701,7 @@ async fn fetch_route(
                     "seq": e.seq,
                     "entryId": e.entry_id,
                     "chainDigest": e.chain_digest_hex,
+                    "prevDigest": e.prev_digest_hex,
                     "receivedAt": e.received_at,
                     "object": e.object,
                 })).collect::<Vec<_>>(),
@@ -675,7 +765,6 @@ pub fn router(state: AppState, limits: Limits) -> Router {
 mod tests {
     use super::*;
     use base64::Engine as _;
-    use zsol_types::ANCHOR_MEMO_TAG;
 
     fn open_mem() -> Connection {
         let mut c = Connection::open_in_memory().unwrap();
@@ -683,31 +772,33 @@ mod tests {
         c
     }
 
-    /// Self-consistent fixture (fixed point via memoBinding exclusion, SPEC §4).
+    /// Self-consistent 0.2 fixture: memoBinding = 0xFF‖zs02‖D(frame).
     fn sample(agent: &str, txid: &str, issued_at: u64) -> AttestationObject {
-        sample_h(agent, txid, issued_at, 4_509_856)
+        sample_h(agent, txid, issued_at, 4_544_800)
     }
 
     /// Height-parameterized variant (T-08 harness needs distinct heights).
     fn sample_h(agent: &str, txid: &str, issued_at: u64, height: u64) -> AttestationObject {
         let mut o = AttestationObject {
             protocol: zsol_types::PROTOCOL.into(),
+            network: "test".into(),
             agent_id: agent.into(),
             claim_zat: 1_000_000,
-            anchor_height: height,
-            anchor_txid: txid.into(),
-            account_ua: "u1test".into(),
-            memo_binding: String::new(),
+            pool: "ironwood".into(),
+            session_key: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+                    .verifying_key()
+                    .as_bytes(),
+            ),
+            birthday: 4_540_000,
             issued_at,
             max_age_hours: 24,
+            anchor_txid: txid.into(),
+            anchor_height: height as u32,
+            memo_binding: String::new(),
         };
-        let d = o.digest().unwrap();
-        let mut memo = vec![];
-        memo.extend_from_slice(&ANCHOR_MEMO_TAG);
-        memo.push(zsol_types::ANCHOR_MEMO_VER);
-        memo.extend_from_slice(&o.anchor_height.to_le_bytes());
-        memo.extend_from_slice(&d);
-        o.memo_binding = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&memo);
+        o.memo_binding =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(o.expected_memo().unwrap());
         o
     }
 
@@ -776,14 +867,6 @@ mod tests {
         // Same agent, different txid → NOT a duplicate (append allowed)
         let mut o2 = o.clone();
         o2.anchor_txid = "f".repeat(64);
-        // rebuild fixed point for the new txid (digest shifts with txid field)
-        let d2 = o2.digest().unwrap();
-        let mut memo = vec![];
-        memo.extend_from_slice(&ANCHOR_MEMO_TAG);
-        memo.push(zsol_types::ANCHOR_MEMO_VER);
-        memo.extend_from_slice(&o2.anchor_height.to_le_bytes());
-        memo.extend_from_slice(&d2);
-        o2.memo_binding = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&memo);
         publish(&mut c, body_of(&o2), 113).unwrap();
     }
 
@@ -941,5 +1024,91 @@ mod tests {
         // ~0.6 s at 2/s ≈ 1 token back
         std::thread::sleep(std::time::Duration::from_millis(600));
         assert!(matches!(rl.check("ip-1"), LimitDecision::Allowed));
+    }
+
+    /// POST through the real router (all FR-3.4 layers) without binding a socket.
+    async fn post_http(body: Value) -> (StatusCode, Value) {
+        use tower::ServiceExt as _;
+        let state = AppState {
+            db: Arc::new(Mutex::new(open_mem())),
+        };
+        let mut req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v0/attestations")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                1,
+            ))));
+        let resp = router(state, Limits::default()).oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    /// FR-4.2 AC: a POST containing a `ufvk` field returns 400 (and nothing is stored).
+    #[tokio::test]
+    async fn ac_fr42_post_with_ufvk_is_400() {
+        let o = sample("agent-1", &"a".repeat(64), 1_769_337_600);
+        // control: the clean envelope is accepted
+        let (status, _) = post_http(body_of(&o)).await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        let mut body = body_of(&o);
+        body["ufvk"] = json!("uviewtest1qqqq");
+        let (status, reply) = post_http(body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(reply["error"], "key-like-field");
+        assert_eq!(reply["field"], "ufvk");
+    }
+
+    /// FR-4.2 / SPEC §9: every key-like name is refused with 400, at any depth and in
+    /// either envelope or object, case/separator-insensitively; nothing is appended.
+    #[tokio::test]
+    async fn ac_fr42_key_like_fields_rejected() {
+        let o = sample("agent-1", &"b".repeat(64), 1_769_337_600);
+        for name in [
+            "ufvk",
+            "uivk",
+            "seed",
+            "sk",
+            "spendingKey",
+            "spending_key",
+            "USK",
+            "mnemonic",
+        ] {
+            let mut top = body_of(&o);
+            top[name] = json!("x");
+            let (status, reply) = post_http(top).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "top-level {name}");
+            assert_eq!(reply["error"], "key-like-field", "top-level {name}");
+
+            let nested = json!({"object": o.b64u().unwrap(), "meta": [{name: "x"}]});
+            let (status, _) = post_http(nested).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "nested {name}");
+        }
+
+        // smuggled inside the b64u object itself
+        let mut inner = serde_json::to_value(&o).unwrap();
+        inner["ufvk"] = json!("uviewtest1qqqq");
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&inner).unwrap());
+        let mut c = open_mem();
+        let err = publish(&mut c, json!({"object": b64}), 111).unwrap_err();
+        assert!(matches!(err, RegistryReject::KeyLikeField(ref f) if f == "ufvk"));
+        assert_eq!(err.wire().0, StatusCode::BAD_REQUEST);
+        assert_eq!(health(&c).unwrap().chain_length, 0, "nothing stored");
+
+        // a legitimate field that merely contains "key" (sessionKey) is NOT key-like
+        assert!(!is_key_like("sessionKey"));
+        assert!(!is_key_like("anchorTxid"));
     }
 }

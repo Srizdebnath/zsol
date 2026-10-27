@@ -1,5 +1,7 @@
 # zsol agent runbook (T-40, FR-5.2)
 
+> **Superseded (2026-10-26):** this document describes protocol 0.1. See [`SRS.md`](SRS.md) v2.0, [`SPEC.md`](SPEC.md) 0.2, [`BUILD_PLAN.md`](BUILD_PLAN.md) and [`FINDINGS.md`](FINDINGS.md). It will be rewritten as each part is implemented.
+
 Zero-mock contract: everything here points at real binaries and real endpoints.
 Every spend-gated step notes when it leans on `ZSOL_MCP_DRY_RUN=0` (FR-4.5).
 

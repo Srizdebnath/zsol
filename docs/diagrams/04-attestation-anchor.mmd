@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant AG as Claude agent
+    participant MCP as zsol-mcp
+    participant W as zsol-lightwallet
+    participant L as lightwalletd testnet
+    participant R as Registry
+
+    AG->>MCP: zsol_anchor agentId, claimZat
+    MCP->>W: build attestation
+    W->>W: Fresh Ed25519 session key
+    Note over W: Frame = protocol, network, agentId, claimZat, pool, sessionKey, birthday, issuedAt, maxAgeHours
+    W->>W: D = BLAKE2b-256 over canonical frame personal zsol/0.2-frame
+    W->>W: Build self-spend zsol-attn to zsol-attn memo 0xFF‖zs02‖D, padded to 512 bytes
+    W->>L: SendTransaction
+    Note over L: Mined in about one 25 s block G1 measured 126 s end to end
+    W->>L: GetTransaction until mined
+    L-->>W: anchorTxid at anchorHeight
+    W->>W: Object = frame + anchorTxid + anchorHeight + memoBinding
+    W-->>MCP: attestation object, b64u
+    MCP-->>AG: objectB64u
+    AG->>MCP: zsol_publish, optional
+    MCP->>R: claim object only, no keys
+    Note over L: Chain observers see one ordinary fully shielded transaction

@@ -1,6 +1,6 @@
 /// Hand-rolled JSON-RPC 2.0 envelope (no SDK): single + batch, calls vs notifications,
 /// exact RFC error codes. Used by both transports (stdio line-delimited; HTTP POST /mcp).
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub const PARSE: i64 = -32700;
 pub const INVALID_REQUEST: i64 = -32600;
@@ -24,10 +24,10 @@ pub enum Incoming {
 /// a missing id makes it a notification.
 pub fn parse_one(v: &Value) -> Result<Incoming, (i64, &'static str)> {
     let obj = v.as_object().ok_or((INVALID_REQUEST, "not an object"))?;
-    if let Some(jr) = obj.get("jsonrpc") {
-        if jr != "2.0" {
-            return Err((INVALID_REQUEST, "jsonrpc must be exactly \"2.0\""));
-        }
+    if let Some(jr) = obj.get("jsonrpc")
+        && jr != "2.0"
+    {
+        return Err((INVALID_REQUEST, "jsonrpc must be exactly \"2.0\""));
     }
     let method = obj
         .get("method")

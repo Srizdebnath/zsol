@@ -1,40 +1,113 @@
 //! MCP protocol dispatch: initialize / ping / tools/list / tools/call (MCP 1.0 surface,
 //! hand-rolled per FR-4.1/4.2 — no SDK dependency, exact MCP method semantics).
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::ops::{self, ToolCtx, ToolError};
-use crate::proto::{error, result, Call, Incoming};
+use crate::proto::{Call, Incoming, error, result};
 
 pub const SERVER_NAME: &str = "zsol-mcp";
-pub const SERVER_VERSION: &str = "0.1.0";
+pub const SERVER_VERSION: &str = "0.2.0";
 
 fn tool_defs() -> Vec<Value> {
     let schema = |props: Value, req: Value| json!({"type": "object", "properties": props, "required": req, "additionalProperties": false});
-    let int = json!({"type": "integer", "minimum": zsol_types::DUST_FLOOR_ZAT});
+    let obj = json!({"type": "string", "description": "attestation object, b64u (default: this wallet's newest mined attestation)"});
+    let tool = |name: &str, desc: &str, input: Value| json!({"name": name, "description": desc, "inputSchema": input});
     vec![
-        json!({"name": "zsol_health", "description": "Stack status: zebra ready / zallet verbs pinned / registry reachable / height. SPEC §8.", "inputSchema": schema(json!({}), json!([]))}),
-        json!({"name": "zsol_prepare_anchor", "description": "Dry-run: checks attest account balance ≥ claimZat + fee floor, returns the planned anchor shape. Never sends.", "inputSchema": schema(json!({"claimZat": int}), json!(["claimZat"]))}),
-        json!({"name": "zsol_anchor", "description": "PERFORMS the self-spend anchor (blocked by dry-run default, ZSOL_MCP_DRY_RUN). Returns txid + window height + mined-height evidence.", "inputSchema": schema(json!({"claimZat": int, "agentId": json!({"type": "string"}), "maxAgeHours": json!({"type": "integer", "minimum": 1, "maximum": 720})}), json!(["claimZat", "agentId"]))}),
-        json!({"name": "zsol_make_attestation", "description": "Derives the attestation object (incl. memo binding) from the last anchored tx; returns canonical b64u + frame digest.", "inputSchema": schema(json!({"claimZat": json!({"type": "integer"}), "agentId": json!({"type": "string"})}), json!([]))}),
-        json!({"name": "zsol_publish", "description": "Publishes a canonical object (b64u) to the registry POST /v0/attestations. Dry-run previews the exact body.", "inputSchema": schema(json!({"object": json!({"type": "string"})}), json!(["object"]))}),
-        json!({"name": "zsol_share_scope", "description": "Exports the scoped uivk of a per-verifier CLEAN sub-account (never account #0, never master). Honest revocation note included.", "inputSchema": schema(json!({"peerLabel": json!({"type": "string"})}), json!(["peerLabel"]))}),
-        json!({"name": "zsol_import_scope", "description": "Verifier: imports a uivk (never spend-class material) into the verifier Zallet; returns scan-state counts only.", "inputSchema": schema(json!({"uivk": json!({"type": "string"}), "label": json!({"type": "string"})}), json!(["uivk"]))}),
-        json!({"name": "zsol_verify", "description": "Verifier: runs all §6 checks on an object; returns tier (verified|claim-only) + per-check reason rows (§9 codes).", "inputSchema": schema(json!({"object": json!({"type": "string"})}), json!(["object"]))}),
-        json!({"name": "zsol_registry_fetch", "description": "Verifier: fetches an agent's registry entries; recomputes the digest chain independently per SPEC §7.", "inputSchema": schema(json!({"agentId": json!({"type": "string"})}), json!(["agentId"]))}),
+        tool(
+            "zsol_health",
+            "Live status: lightwalletd endpoint boot check (network + NU7 consensus branch), wallet presence, registry and Credit Desk reachability, spend permission.",
+            schema(json!({}), json!([])),
+        ),
+        tool(
+            "zsol_wallet_status",
+            "Sync this agent's wallet to the chain tip; return balances per account and shielded receive addresses.",
+            schema(json!({}), json!([])),
+        ),
+        tool(
+            "zsol_anchor",
+            "ATTESTOR, BROADCASTS: self-spend inside the dedicated zsol-attn account carrying memo 0xFF‖zs02‖D(frame); waits until mined and returns the finished attestation object (SPEC §5). Requires ZSOL_ALLOW_SPEND=1.",
+            schema(
+                json!({"agentId": {"type": "string", "maxLength": 64}, "claimZat": {"type": "integer", "minimum": zsol_types::DUST_FLOOR_ZAT}, "maxAgeHours": {"type": "integer", "minimum": 1, "maximum": 720}}),
+                json!(["agentId", "claimZat"]),
+            ),
+        ),
+        tool(
+            "zsol_attestations",
+            "ATTESTOR: list this wallet's attestations (finishing any whose anchor has since been mined).",
+            schema(json!({}), json!([])),
+        ),
+        tool(
+            "zsol_publish",
+            "ATTESTOR: publish an attestation's claim tier to the public registry (no keys, no balances).",
+            schema(json!({"object": obj.clone()}), json!([])),
+        ),
+        tool(
+            "zsol_present",
+            "ATTESTOR: answer a verifier's challenge: signs it with the session key and returns {object, ufvk, challenge, signature}. Discloses the zsol-attn account history to that verifier only.",
+            schema(
+                json!({"challenge": {"type": "object"}, "object": obj.clone()}),
+                json!(["challenge"]),
+            ),
+        ),
+        tool(
+            "zsol_release",
+            "ATTESTOR, BROADCASTS: move the zsol-attn balance to commerce, ending every attestation; watching verifiers see it within one block (SPEC §8).",
+            schema(json!({}), json!([])),
+        ),
+        tool(
+            "credit_request",
+            "BORROWER: ask the Credit Desk for pay-later credit on a Bitrefill product, proving live solvency with the newest attestation (challenge-response). Returns the loan, the redemption payload and repayment instructions.",
+            schema(
+                json!({"productId": {"type": "string", "description": "Bitrefill product id, e.g. test-gift-card-code"}, "valueUsd": {"type": "integer", "minimum": 1}, "object": obj.clone()}),
+                json!(["productId", "valueUsd"]),
+            ),
+        ),
+        tool(
+            "credit_repay",
+            "BORROWER, BROADCASTS: repay a Credit Desk loan from the commerce account with the loan memo (shielded).",
+            schema(json!({"loanId": {"type": "string"}}), json!(["loanId"])),
+        ),
+        tool(
+            "zsol_challenge",
+            "VERIFIER: issue a fresh challenge (32-byte nonce, 10-minute expiry) for an attestor to sign.",
+            schema(json!({}), json!([])),
+        ),
+        tool(
+            "zsol_verify",
+            "VERIFIER: run checks C1–C8 (SPEC §6) on a presentation in this agent's own view-only wallet; returns tier verified|claim-only with a typed row per check.",
+            schema(
+                json!({"presentation": {"type": "object"}}),
+                json!(["presentation"]),
+            ),
+        ),
+        tool(
+            "zsol_watch",
+            "VERIFIER: one solvency-watch tick for an attestation already verified here: live, released (anchored notes spent) or expired.",
+            schema(json!({"object": obj.clone()}), json!([])),
+        ),
+        tool(
+            "zsol_registry_fetch",
+            "Fetch an agent's registry entries and recompute the digest chain locally.",
+            schema(json!({"agentId": {"type": "string"}}), json!(["agentId"])),
+        ),
     ]
 }
 
 async fn call_tool(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Value, ToolError> {
     match name {
-        "zsol_health" => ops::zsol_health(ctx).await,
-        "zsol_prepare_anchor" => ops::prepare_anchor(ctx, args).await,
+        "zsol_health" => ops::health(ctx).await,
+        "zsol_wallet_status" => ops::wallet_status(ctx).await,
         "zsol_anchor" => ops::anchor(ctx, args).await,
-        "zsol_make_attestation" => ops::make_attestation(ctx, args).await,
+        "zsol_attestations" => ops::attestations(ctx).await,
         "zsol_publish" => ops::publish(ctx, args).await,
-        "zsol_share_scope" => ops::share_scope(ctx, args).await,
-        "zsol_import_scope" => ops::import_scope(ctx, args).await,
+        "zsol_present" => ops::present(ctx, args).await,
+        "zsol_release" => ops::release(ctx).await,
+        "credit_request" => ops::credit_request(ctx, args).await,
+        "credit_repay" => ops::credit_repay(ctx, args).await,
+        "zsol_challenge" => ops::challenge(ctx).await,
         "zsol_verify" => ops::verify(ctx, args).await,
+        "zsol_watch" => ops::watch(ctx, args).await,
         "zsol_registry_fetch" => ops::registry_fetch(ctx, args).await,
         other => Err(ToolError::slug(
             "unknown-tool",
@@ -77,7 +150,7 @@ async fn dispatch_call(ctx: &ToolCtx, c: &Call) -> Value {
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}},
                     "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-                    "instructions": "zsol proof-of-funds attestation: attestor flow prepare_anchor→anchor→make_attestation→publish; verifier flow import_scope→registry_fetch→verify. Dry-run default: anchor sends nothing until ZSOL_MCP_DRY_RUN=0.",
+                    "instructions": "zsol: live, private proof of funds on Zcash. Attestor: zsol_wallet_status → zsol_anchor → zsol_publish → zsol_present (or credit_request at the Credit Desk) → credit_repay. Verifier: zsol_challenge → zsol_verify → zsol_watch. Broadcasting tools need ZSOL_ALLOW_SPEND=1.",
                 }),
             )
         }
@@ -113,5 +186,38 @@ pub async fn dispatch_value(ctx: &ToolCtx, v: &Value) -> Vec<Value> {
             vec![]
         }
         Err((code, msg)) => vec![error(&Value::Null, code, msg)],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FR-5.2 at the MCP dispatch level: `tools/call zsol_release` on a default (spend
+    /// disabled) gateway is an isError result carrying `spend-disabled`, and no wallet or
+    /// chain session is opened.
+    #[tokio::test]
+    async fn tools_call_release_refused_when_spend_disabled() {
+        let ctx = ToolCtx::offline(false, 10_000_000);
+        for tool in ["zsol_release", "credit_repay", "zsol_anchor"] {
+            let req = json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": tool,
+                    "arguments": {"loanId": "00", "agentId": "a", "claimZat": 1_000_000},
+                },
+            });
+            let out = dispatch_value(&ctx, &req).await;
+            assert_eq!(out.len(), 1, "{tool}");
+            let res = &out[0]["result"];
+            assert_eq!(res["isError"], true, "{tool}");
+            let inner: Value =
+                serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(inner["reason"], "spend-disabled", "{tool}");
+        }
+        assert!(ctx.session_unopened().await);
+        assert!(!ctx.wallet_dir.exists());
     }
 }

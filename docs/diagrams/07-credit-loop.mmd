@@ -1,0 +1,27 @@
+sequenceDiagram
+    participant A as Borrower agent, Claude + zsol-mcp
+    participant Z as Zcash testnet
+    participant D as Credit Desk, zsol-credit
+    participant B as Bitrefill API v2
+
+    A->>Z: zsol_anchor, claim 50,000,000 zat
+    Note over Z: anchor 20ec2cc8…00ef mined at 4,546,439, 157 s
+    A->>D: credit_request test-gift-card-code, 10 USD
+    D-->>A: challenge with fresh nonce
+    A->>D: presentation: object, UFVK, signature
+    D->>Z: import UFVK view-only, sync
+    D->>D: C1 to C8 all ok, tier verified
+    D->>B: POST /v2/invoices, pay from balance
+    B-->>D: invoice b46f2eb7…, gift card code
+    D-->>A: loan 71b26fe0… open, code delivered
+    Note over D: height 4,546,442 principal 820,931 zat at 1,218.13 USD/ZEC, due 4,549,898
+    A->>Z: zsol_release, 89,970,000 zat zsol-attn to commerce
+    Note over Z: spend 8657a142…99ee mined at 4,546,446
+    D->>Z: watch tick sees anchored note spent
+    D->>D: attestation-released loan at-risk, credit frozen
+    Note over D: height 4,546,446, 0 blocks lag
+    A->>Z: credit_repay, 820,931 zat from commerce memo 0xFF‖zsc1‖loanId
+    Note over Z: repayment a66d965f…bc37
+    D->>Z: treasury scan decodes loan memo
+    D->>D: loan-repaid, loan repaid
+    Note over D: height 4,546,455

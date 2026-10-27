@@ -1,0 +1,65 @@
+flowchart TB
+    subgraph BOR["Borrower agent process"]
+        CL["Claude agent"]
+        MCP["zsol-mcp stdio or HTTP"]
+        LW["zsol-lightwallet"]
+        SEED[("seed.age age-encrypted seed")]
+        COM["Account commerce payments and repayments"]
+        ATT["Account zsol-attn funding and anchors only"]
+        NEV["Never leaves this box: seed, spending keys, commerce viewing key"]
+        CL -->|"MCP tools"| MCP
+        MCP --> LW
+        LW --> SEED
+        LW --> COM
+        LW --> ATT
+    end
+
+    subgraph DESK["Credit Desk process"]
+        CR["zsol-credit HTTP :8090"]
+        VER["zsol-verifier view-only UFVK import"]
+        TRE["Account treasury receives repayments"]
+        LOANS[("loans.sqlite loans and events")]
+        POL["credit-policy.json mode test, LTV 50%"]
+        CR --> VER
+        CR --> TRE
+        CR --> LOANS
+        CR --> POL
+    end
+
+    subgraph REG["Public registry"]
+        RS["zsol-registry HTTP :8088"]
+        RDB[("Claims and digest chain no keys, no balances")]
+        RS --> RDB
+    end
+
+    subgraph GW["Public verifier gateway"]
+        GWM["zsol-mcp, verifier role own view-only wallet"]
+    end
+
+    subgraph WEB["Web, Next.js"]
+        W1["Status page route /"]
+        W2["Registry explorer /explorer"]
+        W3["Live loan board /desk"]
+        W4["Judge self-serve /verify"]
+    end
+
+    subgraph ZC["Zcash testnet"]
+        LWD["lightwalletd testnet.zec.rocks:443"]
+        NET["NU7 active branch 0x77190ad9"]
+        LWD --- NET
+    end
+
+    BR["Bitrefill API v2 test products, pay from balance"]
+    JUDGE["Judge or observer"]
+
+    MCP -->|"object + UFVK of zsol-attn + signed challenge, direct"| CR
+    MCP -->|"claim object only"| RS
+    CR -->|"invoice and code"| BR
+    LW -->|"compact blocks, send tx"| LWD
+    VER -->|"sync from birthday"| LWD
+    GWM -->|"sync"| LWD
+    CR -->|"SSE /v0/events"| W3
+    W2 -->|"fetch claims"| RS
+    W4 -->|"relay zsol_verify"| GWM
+    JUDGE --> W4
+    JUDGE --> W2
