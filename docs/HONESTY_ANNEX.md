@@ -1,5 +1,7 @@
 # zsol honesty annex (T-45, SPEC §10) — leak-surface truth
 
+> **Superseded (2026-10-26):** this document describes protocol 0.1. See [`SRS.md`](SRS.md) v2.0, [`SPEC.md`](SPEC.md) 0.2, [`BUILD_PLAN.md`](BUILD_PLAN.md) and [`FINDINGS.md`](FINDINGS.md). It will be rewritten as each part is implemented.
+
 This annex states, without varnish, what each shared artifact EXPOSES and what
 the registry CANNOT know. Written for reviewers and for the demo audience.
 Nothing in zsol was designed under the assumption that these facts are hidden.
