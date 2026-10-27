@@ -70,14 +70,14 @@ notes say so.
 | FR-2.2 | age-encrypted seed; accounts `commerce` + `zsol-attn`; Ironwood UA | `done-live-testnet` | `src/seed.rs`, `src/wallet.rs` (`create_spending`, `address`) | Wallets created live in G0 (0600 files). The seed-needs-identity part is a unit test (`seed_roundtrips_through_age_and_files_are_private`). **AC gap:** no explicit restart/re-derive-same-UA transcript. |
 | FR-2.3 | Sync with progress | `done-live-testnet` | `src/wallet.rs` `sync`, `src/cache.rs` | G0: synced to tip 4,544,857 in 8 s |
 | FR-2.4 | Anchor builder: propose → create → broadcast → wait mined | `done-live-testnet` | `src/attest.rs` `anchor`, `finalize_pending` | G1 anchor `30f12fbd…6569`. Explorer-visibility part of the AC is blocked (no post-NU7 explorer). |
-| FR-2.5 | UFVK export only for `zsol-attn*`; refuse `commerce` | `in-progress` | `src/wallet.rs` `export_ufvk`, `is_shareable_account` | The refusal is in code, and the `zsol-attn` export was used live (G2/G3). **Missing:** the negative test the AC requires (no test calls `export_ufvk("commerce")`). |
+| FR-2.5 | UFVK export limited to `zsol-attn*`; `commerce` refused | `done` | `zsol-lightwallet/src/wallet.rs` `export_ufvk`, `is_shareable_account` | Tests `shareable_account_rule`, `export_ufvk_refuses_commerce` (real offline wallet). |
 | FR-2.6 | Shielded payment from `commerce` with memo | `done-live-testnet` | `src/wallet.rs` `pay`; CLI `zsol wallet send --memo-hex`; MCP `credit_repay` | G3d txid `45f28601…be2a`: borrower-b `commerce` → shielded, with a memo, mined @ 4,544,997. A Credit-Desk repayment memo (`zsc1`) has not been sent yet; that is part of G5. |
 
 ## FR-3 Verifier (`crates/zsol-verifier`)
 
 | ID | Requirement | Status | Code | Evidence / notes |
 |---|---|---|---|---|
-| FR-3.1 | View-only UFVK import at birthday in the verifier's own DB | `done-live-testnet` | `zsol-lightwallet/src/wallet.rs` `create_view_only`, `import_view_only`; `zsol-verifier/src/lib.rs` `verify` | G2 (underwriter wallet) and G3 (a fresh temp wallet per case). **AC gap:** "no attestor key material present" is true by construction but not asserted by a test. |
+| FR-3.1 | View-only import in the verifier's own DB, no attestor key material | `done-live-testnet` | `zsol-verifier`, `zsol-lightwallet` `import_view_only` | Live: G2. Test `verifier_wallet_holds_no_key_material` (offline; the lightwalletd birthday fetch is not covered). |
 | FR-3.2 | C1–C8 typed rows; live `verified` + four negative codes | `done-live-testnet` | `zsol-verifier/src/lib.rs`; `tests/live_testnet.rs` (`#[ignore]`, live) | [`G2-report.json`](evidence/G2-report.json), [`G3-negative-cases.md`](evidence/G3-negative-cases.md) |
 | FR-3.3 | Watch loop `live`/`released`/`expired`; `released` ≤ 2 blocks after spend | `done-live-testnet` | `zsol-verifier/src/lib.rs` `watch_tick`, `WatchState`; used by `zsol-credit` `tick` | [`G4-G5-credit-loop.md`](evidence/G4-G5-credit-loop.md) (`expired` path not exercised live) |
 
@@ -86,14 +86,14 @@ notes say so.
 | ID | Requirement | Status | Code | Evidence / notes |
 |---|---|---|---|---|
 | FR-4.1 | 0.2 protocol bump, 0.1 behaviour kept | `in-progress` | `src/lib.rs` (uses `zsol_types::PROTOCOL` = `zsol/0.2`) | The AC is unit-level: the 11 registry tests pass with 0.2 objects (run 2026-10-27). No 0.2 object has been published to a running registry yet. |
-| FR-4.2 | Reject key-like fields (`ufvk` → 400) | `in-progress` | `zsol-types` `#[serde(deny_unknown_fields)]` → `RegistryReject::Malformed` (400) | Holds by construction. **Missing:** no test POSTs a `ufvk` field. |
+| FR-4.2 | Registry rejects key-like fields | `done` | `zsol-registry/src/lib.rs` `KeyLikeField` (recursive, envelope + decoded object) | Tests `ac_fr42_post_with_ufvk_is_400`, `ac_fr42_key_like_fields_rejected`. Top-level `ufvk` was accepted before 2026-10-27. |
 
 ## FR-5 MCP gateway (`crates/zsol-mcp`)
 
 | ID | Requirement | Status | Code | Evidence / notes |
 |---|---|---|---|---|
 | FR-5.1 | Attestor + verifier tools over stdio and HTTP; `claude mcp list` | `in-progress` | `src/mcp.rs` `tool_defs`, `src/ops.rs`, `src/stdio.rs`, `src/http.rs` | 13 tools are implemented: `zsol_health`, `zsol_wallet_status`, `zsol_anchor`, `zsol_attestations`, `zsol_publish`, `zsol_present`, `zsol_release`, `zsol_challenge`, `zsol_verify`, `zsol_watch`, `zsol_registry_fetch`, `credit_request`, `credit_repay`. **The names differ from SRS** (see inconsistencies). The only `claude mcp` evidence is the 0.1 regtest-era [`T32-T33`](evidence/T32-T33-claude-mcp.md). | SRS v2.1 now lists the implemented tool names.
-| FR-5.2 | Spend tools refuse unless `ZSOL_ALLOW_SPEND=1` and within `ZSOL_SPEND_CAP_ZAT` | `in-progress` | `src/ops.rs` `spend_gate` (used by `zsol_anchor`, `credit_repay`, `zsol_release`) | Gate applied to every broadcasting tool (2026-10-27). No automated negative test yet. |
+| FR-5.2 | Spend tools refuse unless `ZSOL_ALLOW_SPEND=1` and within `ZSOL_SPEND_CAP_ZAT` | `done` | `zsol-mcp/src/ops.rs` `spend_gate`/`spend_enabled_gate` (checked before any wallet or network access) | Unit + JSON-RPC tests: `ops.rs` `spend_gate_*`, `broadcasting_tools_refuse_when_disabled`; `mcp.rs` `tools_call_release_refused_when_spend_disabled`. |
 
 ## FR-6 Credit Desk (`crates/zsol-credit`)
 
