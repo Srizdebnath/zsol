@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use zsol_types::{chain_digest, AttestationObject, ReasonCode, ZsolError};
+use zsol_types::{chain_digest, AttestationObject, ReasonCode};
 
 /// Transport-level rejection slugs (distinct from SPEC §9 status codes, which are
 /// attestation-verification semantics; §9 codes are reused where the taxonomy has one).
@@ -201,12 +201,13 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
     }
 
     // Structural floors (§9 codes reused where the taxonomy has one).
-    object.validate().map_err(|e| match e {
-        ZsolError::Claim(rc) => RegistryReject::Reason(rc),
-        ZsolError::Json => RegistryReject::Malformed("object json".into()),
-        ZsolError::Base64 => RegistryReject::Malformed("object b64u".into()),
-        other => RegistryReject::Malformed(format!("{other}")),
-    })?;
+    // Structural floors (SPEC §6 C1 codes). Unknown fields — e.g. a smuggled `ufvk` — were
+    // already refused by serde (`deny_unknown_fields`), so keys can never be stored (FR-4.2).
+    let network = match object.network.as_str() {
+        n @ ("test" | "main") => n.to_string(),
+        _ => return Err(RegistryReject::Reason(ReasonCode::NetworkMismatch)),
+    };
+    object.validate(&network).map_err(RegistryReject::Reason)?;
 
     let tx = conn
         .transaction()
@@ -236,10 +237,10 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
             |r| r.get(0),
         )
         .map_err(|e| RegistryReject::Db(format!("watermark read: {e}")))?;
-    if object.anchor_height < watermark {
+    if u64::from(object.anchor_height) < watermark {
         return Err(RegistryReject::ChainDescended {
             watermark,
-            posted: object.anchor_height,
+            posted: u64::from(object.anchor_height),
         });
     }
 
@@ -289,7 +290,7 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
     .map_err(|e| RegistryReject::Db(format!("head advance: {e}")))?;
 
     // Watermark only ever advances (trigger guards the floor).
-    if object.anchor_height > watermark {
+    if u64::from(object.anchor_height) > watermark {
         tx.execute(
             "UPDATE chain_meta SET watermark_height = ?1 WHERE id = 1",
             params![object.anchor_height],
@@ -319,6 +320,9 @@ pub struct FetchEntry {
     pub seq: i64,
     pub entry_id: String,
     pub chain_digest_hex: String,
+    /// Digest of the globally-prior row (whole-chain chain is one sequence);
+    /// `None` marks the very first entry, whose prev is the zero genesis.
+    pub prev_digest_hex: Option<String>,
     pub received_at: u64,
     /// Canonical bytes exactly as stored — verifiers recompute the chain from these.
     pub object_canonical: Vec<u8>,
@@ -343,8 +347,32 @@ pub fn fetch(conn: &Connection, agent_id: &str) -> Result<FetchResult, RegistryR
         .map_err(|e| RegistryReject::Db(format!("prepare: {e}")))?;
 
     let mut entries = Vec::new();
+    // Prev-digest adjacency is GLOBAL (single chain_head row): each entry's
+    // chainDigest depends on the digest of whatever was inserted immediately
+    // before it across ALL agents. Export that adjacency so verifiers
+    // recompute the exact SPEC §7 formula instead of per-agent assumptions.
+    let mut prevs: HashMap<String, String> = HashMap::new();
+    {
+        let mut all = conn
+            .prepare("SELECT entry_id, digest FROM attestations ORDER BY seq ASC")
+            .map_err(|e| RegistryReject::Db(format!("prepare: {e}")))?;
+        let walk = all
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(|e| RegistryReject::Db(format!("rows: {e}")))?;
+        let mut prev: Option<(String, String)> = None; // (entry_id, hex digest)
+        for row in walk {
+            let (id, digest) = row.map_err(|e| RegistryReject::Db(format!("row: {e}")))?;
+            if let Some((_, ph)) = &prev {
+                prevs.insert(id.clone(), ph.clone());
+            }
+            prev = Some((id, hex::encode(digest)));
+        }
+    }
     let rows = stmt
         .query_map(params![agent_id], |r| {
+            let entry_id: String = r.get(1)?;
             let obj_bytes: Vec<u8> = r.get(4)?;
             let object: AttestationObject = serde_json::from_slice(&obj_bytes).map_err(|_| {
                 rusqlite::Error::FromSqlConversionFailure(
@@ -355,7 +383,8 @@ pub fn fetch(conn: &Connection, agent_id: &str) -> Result<FetchResult, RegistryR
             })?;
             Ok(FetchEntry {
                 seq: r.get(0)?,
-                entry_id: r.get(1)?,
+                prev_digest_hex: prevs.get(&entry_id).cloned(),
+                entry_id,
                 chain_digest_hex: hex::encode({
                     let d: Vec<u8> = r.get(2)?;
                     d
@@ -612,6 +641,7 @@ async fn fetch_route(
                     "seq": e.seq,
                     "entryId": e.entry_id,
                     "chainDigest": e.chain_digest_hex,
+                    "prevDigest": e.prev_digest_hex,
                     "receivedAt": e.received_at,
                     "object": e.object,
                 })).collect::<Vec<_>>(),
@@ -675,7 +705,6 @@ pub fn router(state: AppState, limits: Limits) -> Router {
 mod tests {
     use super::*;
     use base64::Engine as _;
-    use zsol_types::ANCHOR_MEMO_TAG;
 
     fn open_mem() -> Connection {
         let mut c = Connection::open_in_memory().unwrap();
@@ -683,31 +712,33 @@ mod tests {
         c
     }
 
-    /// Self-consistent fixture (fixed point via memoBinding exclusion, SPEC §4).
+    /// Self-consistent 0.2 fixture: memoBinding = 0xFF‖zs02‖D(frame).
     fn sample(agent: &str, txid: &str, issued_at: u64) -> AttestationObject {
-        sample_h(agent, txid, issued_at, 4_509_856)
+        sample_h(agent, txid, issued_at, 4_544_800)
     }
 
     /// Height-parameterized variant (T-08 harness needs distinct heights).
     fn sample_h(agent: &str, txid: &str, issued_at: u64, height: u64) -> AttestationObject {
         let mut o = AttestationObject {
             protocol: zsol_types::PROTOCOL.into(),
+            network: "test".into(),
             agent_id: agent.into(),
             claim_zat: 1_000_000,
-            anchor_height: height,
-            anchor_txid: txid.into(),
-            account_ua: "u1test".into(),
-            memo_binding: String::new(),
+            pool: "ironwood".into(),
+            session_key: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+                    .verifying_key()
+                    .as_bytes(),
+            ),
+            birthday: 4_540_000,
             issued_at,
             max_age_hours: 24,
+            anchor_txid: txid.into(),
+            anchor_height: height as u32,
+            memo_binding: String::new(),
         };
-        let d = o.digest().unwrap();
-        let mut memo = vec![];
-        memo.extend_from_slice(&ANCHOR_MEMO_TAG);
-        memo.push(zsol_types::ANCHOR_MEMO_VER);
-        memo.extend_from_slice(&o.anchor_height.to_le_bytes());
-        memo.extend_from_slice(&d);
-        o.memo_binding = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&memo);
+        o.memo_binding =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(o.expected_memo().unwrap());
         o
     }
 
@@ -776,14 +807,6 @@ mod tests {
         // Same agent, different txid → NOT a duplicate (append allowed)
         let mut o2 = o.clone();
         o2.anchor_txid = "f".repeat(64);
-        // rebuild fixed point for the new txid (digest shifts with txid field)
-        let d2 = o2.digest().unwrap();
-        let mut memo = vec![];
-        memo.extend_from_slice(&ANCHOR_MEMO_TAG);
-        memo.push(zsol_types::ANCHOR_MEMO_VER);
-        memo.extend_from_slice(&o2.anchor_height.to_le_bytes());
-        memo.extend_from_slice(&d2);
-        o2.memo_binding = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&memo);
         publish(&mut c, body_of(&o2), 113).unwrap();
     }
 

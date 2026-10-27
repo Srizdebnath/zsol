@@ -5,9 +5,8 @@
 //!   streamable HTTP: bind ZSOL_MCP_HTTP_BIND (e.g. 127.0.0.1:8099), POST /mcp.
 //! Both can run concurrently by binding HTTP while stdio is active.
 //!
-//! Config (all env): ZEBRA_RPC_URL, ZALLET_RPC_URL(+auth), ZSOL_REGISTRY_URL,
-//! ZSOL_MCP_DRY_RUN (default 1), ZSOL_SHARE_ACCOUNTS, ZSOL_ATTEST_ACCOUNT,
-//! ZSOL_RPC_METHOD_* pin overrides, ZSOL_ANCHOR_MAX_RETRIES.
+//! Config (all env): see `ops.rs` header (ZSOL_WALLET_DIR, ZSOL_LWD, ZSOL_REGISTRY_URL,
+//! ZSOL_CREDIT_URL, ZSOL_ALLOW_SPEND, ZSOL_SPEND_CAP_ZAT, ...).
 
 use std::sync::Arc;
 
@@ -29,9 +28,10 @@ async fn main() -> anyhow::Result<()> {
 
     let ctx = ops::ToolCtx::from_env().map_err(|e| anyhow::anyhow!("config: {e}"))?;
     tracing::info!(
-        dry_run = ctx.dry_run,
-        registry = %ctx.registry_url,
-        "zsol-mcp starting (stdio MCP gateway)"
+        wallet = %ctx.wallet_dir.display(),
+        lwd = %ctx.lwd,
+        allow_spend = ctx.allow_spend,
+        "zsol-mcp starting"
     );
 
     let http_bind = std::env::var("ZSOL_MCP_HTTP_BIND")
