@@ -9,6 +9,13 @@ import { blake2b } from "@noble/hashes/blake2b";
 const REGISTRY_URL =
   process.env.NEXT_PUBLIC_REGISTRY_URL?.replace(/\/$/, "") ?? "";
 const MCP_URL = process.env.NEXT_PUBLIC_MCP_URL?.replace(/\/$/, "") ?? "";
+const CREDIT_URL = process.env.NEXT_PUBLIC_CREDIT_URL?.replace(/\/$/, "") ?? "";
+
+/** NU7 consensus branch id as zsol's boot check formats it (lowercase hex, no 0x). */
+export const NU7_BRANCH = "77190ad9";
+
+/** Health probes must not hang the status page; long-running tools (zsol_verify) have none. */
+const HEALTH_TIMEOUT_MS = 20_000;
 
 export type Down = { down: true; detail: string };
 
@@ -19,7 +26,10 @@ export type Health =
 export async function registryHealth(): Promise<Health> {
   if (!REGISTRY_URL) return { down: true, detail: "NEXT_PUBLIC_REGISTRY_URL unset" };
   try {
-    const res = await fetch(`${REGISTRY_URL}/v0/health`, { cache: "no-store" });
+    const res = await fetch(`${REGISTRY_URL}/v0/health`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+    });
     if (!res.ok) return { down: true, detail: `HTTP ${res.status}` };
     const j = (await res.json()) as {
       ok?: boolean;
@@ -32,7 +42,7 @@ export async function registryHealth(): Promise<Health> {
       watermarkHeight: j.watermarkHeight ?? 0,
     };
   } catch (e) {
-    return { down: true, detail: e instanceof Error ? e.name : "fetch error" };
+    return { down: true, detail: e instanceof Error ? `${e.name}: ${e.message}` : "fetch error" };
   }
 }
 
@@ -40,7 +50,9 @@ export type Entry = {
   seq: number;
   entryId: string;
   chainDigest: string;
-  object: string; // b64u of canonical json (SPEC §4/§7)
+  /** Digest of the globally previous entry; null for the registry's first entry (SPEC §9). */
+  prevDigest?: string | null;
+  object: unknown; // parsed object (current wire) or b64u canonical json
 };
 
 export type FetchResult =
@@ -73,19 +85,20 @@ export async function registryAgent(id: string): Promise<FetchResult> {
         : [];
     return { down: false, agentId: id, entries, ...recheckChain(entries) };
   } catch (e) {
-    return { down: true, detail: e instanceof Error ? e.name : "fetch error" };
+    return { down: true, detail: e instanceof Error ? `${e.name}: ${e.message}` : "fetch error" };
   }
 }
 
 const GENESIS_HEX = "0".repeat(64);
 
-// chainDigestₙ = BLAKE2b-256(chainDigestₙ₋₁ ‖ canonical(objectₙ)) — SPEC §7.
-// The wire carries b64u(canonical json); the chain recompute re-canonicalizes
-// the parsed object (sorted keys, compact) so byte-exact digests match Rust.
+// chainDigestₙ = BLAKE2b-256(chainDigestₙ₋₁ ‖ canonical(objectₙ)) — SPEC §9.
+// The chain is GLOBAL across agents, so each entry's predecessor is its prevDigest
+// (null = genesis), not the previous entry of this agent. Objects are re-canonicalized
+// (sorted keys, compact) so the digests match Rust byte for byte.
 export function recheckChain(entries: Entry[]): { chainOk: boolean; chainError?: string } {
-  let prev = GENESIS_HEX;
   try {
     for (const e of entries) {
+      const prev = e.prevDigest ? e.prevDigest.toLowerCase() : GENESIS_HEX;
       // The registry may hand the object as b64u(canonical json) or already
       // decoded — re-canonicalize whichever shape it is (sorted keys, compact).
       const obj =
@@ -104,7 +117,6 @@ export function recheckChain(entries: Entry[]): { chainOk: boolean; chainError?:
       if (hex !== e.entryId.toLowerCase()) {
         return { chainOk: false, chainError: `seq ${e.seq}: entryId ≠ hex(chainDigest)` };
       }
-      prev = hex;
     }
     return { chainOk: true };
   } catch (e) {
@@ -160,7 +172,7 @@ export type McpToolCall =
 
 export async function mcpToolsList(): Promise<McpTools> {
   if (!MCP_URL) return { down: true, detail: "NEXT_PUBLIC_MCP_URL unset" };
-  const r = await mcpRpc("tools/list", {});
+  const r = await mcpRpc("tools/list", {}, HEALTH_TIMEOUT_MS);
   if ("down" in r) return r as Down;
   const tools = ((r.result as { tools?: { name: string }[] })?.tools ?? []).map(
     (t) => t.name,
@@ -169,16 +181,40 @@ export async function mcpToolsList(): Promise<McpTools> {
 }
 
 export async function mcpZsolHealth(): Promise<McpToolCall> {
-  return callTool("zsol_health", {});
+  return callTool("zsol_health", {}, HEALTH_TIMEOUT_MS);
 }
 
-export async function mcpZsolVerify(objB64u: string): Promise<McpToolCall> {
-  return callTool("zsol_verify", { object: objB64u });
+export async function mcpZsolVerify(presentation: unknown): Promise<McpToolCall> {
+  return callTool("zsol_verify", { presentation });
 }
 
-async function callTool(name: string, args: Record<string, unknown>): Promise<McpToolCall> {
+export async function mcpZsolChallenge(): Promise<McpToolCall> {
+  return callTool("zsol_challenge", {});
+}
+
+/** Unwraps an MCP tools/call envelope {content:[{text}], isError} into its JSON payload. */
+export function unwrapTool(r: McpToolCall): { ok: boolean; value: unknown } {
+  if ("down" in r && r.down) return { ok: false, value: { error: "gateway down", detail: r.detail } };
+  const env = (r as { result?: { content?: { text?: string }[]; isError?: boolean } }).result;
+  const text = env?.content?.[0]?.text;
+  let value: unknown = env;
+  if (typeof text === "string") {
+    try {
+      value = JSON.parse(text);
+    } catch {
+      value = { error: "unparseable tool reply", raw: text };
+    }
+  }
+  return { ok: env?.isError !== true, value };
+}
+
+async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<McpToolCall> {
   if (!MCP_URL) return { down: true, detail: "NEXT_PUBLIC_MCP_URL unset" };
-  const r = await mcpRpc("tools/call", { name, arguments: args });
+  const r = await mcpRpc("tools/call", { name, arguments: args }, timeoutMs);
   if ("down" in r) return r as Down;
   return { down: false, result: r.result };
 }
@@ -186,6 +222,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<Mc
 async function mcpRpc(
   method: string,
   params: unknown,
+  timeoutMs?: number,
 ): Promise<{ result: unknown } | Down> {
   try {
     const res = await fetch(`${MCP_URL}/mcp`, {
@@ -193,6 +230,7 @@ async function mcpRpc(
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: "zsol-web", method, params }),
       cache: "no-store",
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
     });
     if (!res.ok) return { down: true, detail: `HTTP ${res.status}` };
     const j = (await res.json()) as {
@@ -202,6 +240,89 @@ async function mcpRpc(
     if (j.error) return { down: true, detail: `${j.error.code}: ${j.error.message}` };
     return { result: j.result ?? null };
   } catch (e) {
-    return { down: true, detail: e instanceof Error ? e.name : "fetch error" };
+    return { down: true, detail: e instanceof Error ? `${e.name}: ${e.message}` : "fetch error" };
+  }
+}
+
+// ---- shared wire shapes ---------------------------------------------------
+
+/** serde_json encodes a Rust `Result<T, String>` externally tagged: {"Ok": T} | {"Err": "…"}. */
+export type RustResult<T> = { Ok: T } | { Err: string };
+
+export function rustResult<T>(r: RustResult<T> | null | undefined): { ok: true; value: T } | { ok: false; error: string } {
+  if (r && typeof r === "object" && "Ok" in r) return { ok: true, value: r.Ok };
+  if (r && typeof r === "object" && "Err" in r) return { ok: false, error: String(r.Err) };
+  return { ok: false, error: "missing from reply" };
+}
+
+/** zsol-lightwallet chain::ChainInfo (boot-checked: branch matches local consensus at tip). */
+export type ChainInfo = {
+  endpoint: string;
+  chainName: string;
+  consensusBranchId: string;
+  tipHeight: number;
+  vendor: string;
+  version: string;
+};
+
+/** zsol-mcp ops::health payload (tools/call zsol_health). */
+export type Probe = string | { url: string; status?: number; error?: string };
+export type ZsolHealth = {
+  chain: RustResult<ChainInfo>;
+  wallet: { dir: string; exists: boolean };
+  registry: Probe;
+  creditDesk: Probe;
+  spend: { allowed: boolean; capZat: number };
+};
+
+export async function mcpZsolHealthParsed(): Promise<Down | { down?: false; health: ZsolHealth }> {
+  const raw = await mcpZsolHealth();
+  if ("down" in raw && raw.down) return raw;
+  const { ok, value } = unwrapTool(raw);
+  if (!ok) {
+    const v = value as { reason?: unknown; detail?: unknown };
+    return { down: true, detail: `zsol_health failed: ${String(v.reason ?? "")} ${String(v.detail ?? "")}`.trim() };
+  }
+  return { down: false, health: value as ZsolHealth };
+}
+
+// ---- Credit Desk (zsol-credit, SPEC §11) ----------------------------------
+
+export type CreditPolicy = {
+  version: string;
+  underwriterId: string;
+  mode: string;
+  ltvBps: number;
+  maxLoanUsd: number;
+  maxTenorBlocks: number;
+  minConf: number;
+  rateMaxAgeSecs: number;
+  allowedProducts: string[];
+};
+
+/** zsol-lightwallet wallet::Balance. */
+export type Balance = { account: string; totalZat: number; spendableZat: number; pendingZat: number };
+
+/** GET /v0/health on zsol-credit. */
+export type CreditHealth = {
+  ok: boolean;
+  chain: RustResult<ChainInfo>;
+  treasury: Balance | null;
+  bitrefill: boolean;
+  bitrefillBalance: RustResult<unknown>;
+  policy: CreditPolicy;
+};
+
+export async function creditHealth(): Promise<Down | { down?: false; health: CreditHealth }> {
+  if (!CREDIT_URL) return { down: true, detail: "NEXT_PUBLIC_CREDIT_URL unset" };
+  try {
+    const res = await fetch(`${CREDIT_URL}/v0/health`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+    });
+    if (!res.ok) return { down: true, detail: `HTTP ${res.status}` };
+    return { down: false, health: (await res.json()) as CreditHealth };
+  } catch (e) {
+    return { down: true, detail: e instanceof Error ? `${e.name}: ${e.message}` : "fetch error" };
   }
 }

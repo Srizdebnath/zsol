@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "zsol — agent solvency attestations on Zcash",
   description:
-    "Proof-of-funds attestations for AI agents: shielded self-spend anchors, digest-chained claim registry, MCP gateway.",
+    "Live, private proof of funds for AI agents on Zcash, and a Credit Desk that turns it into pay-later Bitrefill purchases.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -17,11 +17,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Link href="/">status</Link>
           <Link href="/explorer">explorer</Link>
           <Link href="/verify">verify</Link>
+          <Link href="/desk">credit desk</Link>
         </nav>
         <main>{children}</main>
         <div className="footnote" style={{ maxWidth: 980, margin: "0 auto 32px" }}>
-          zsol is evidence ABOUT claims, never a source of truth for solvency. Everything this
-          page shows is fetched live from the registry / MCP gateway; down services show DOWN.
+          Every value on these pages is fetched live from the registry, the MCP gateway or the
+          Credit Desk, which read Zcash testnet. A service that is down shows DOWN.
         </div>
       </body>
     </html>

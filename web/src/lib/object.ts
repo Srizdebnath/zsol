@@ -3,6 +3,8 @@
 
 export type ObjectSummary = {
   protocol?: string;
+  network?: string;
+  pool?: string;
   agentId?: string;
   claimZat?: number;
   anchorHeight?: number;
@@ -11,7 +13,10 @@ export type ObjectSummary = {
   maxAgeHours?: number;
 };
 
-export function decodeObjectSummary(b64u: string): ObjectSummary | null {
+export function decodeObjectSummary(obj: unknown): ObjectSummary | null {
+  if (obj && typeof obj === "object") return obj as ObjectSummary;
+  if (typeof obj !== "string") return null;
+  const b64u = obj;
   try {
     const json = atob(
       b64u.replace(/-/g, "+").replace(/_/g, "/") +
