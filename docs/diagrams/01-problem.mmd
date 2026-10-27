@@ -1,7 +1,7 @@
 flowchart TD
-    A["AI agent wants to buy<br/>from another party"] --> Q{"How does it prove<br/>it can pay?"}
+    A["AI agent wants to buy from another party"] --> Q{"How does it prove it can pay?"}
     A --> M["It holds only ZEC"]
-    M --> MB["Bitrefill and most merchants<br/>do not accept ZEC"]
+    M --> MB["Bitrefill and most merchants do not accept ZEC"]
     MB --> MG["Agent cannot buy at all"]
 
     Q --> N1["Just state a balance"]
@@ -12,17 +12,17 @@ flowchart TD
 
     N1 --> F1["Unverifiable claim"]
     N2 --> F2["Forgeable static snapshot"]
-    N3 --> F3["Leaks the whole<br/>payment history"]
-    N4 --> F4["Custody and trust<br/>in a third party"]
-    N5 --> F5["Incoming key never sees spends<br/>so liveness can never fail"]
-    N5 --> F6["Anyone can send a memo<br/>so donation forgery works"]
-    N5 --> F7["No challenge<br/>so a verifier can relay it"]
+    N3 --> F3["Leaks the whole payment history"]
+    N4 --> F4["Custody and trust in a third party"]
+    N5 --> F5["Incoming key never sees spends so liveness can never fail"]
+    N5 --> F6["Anyone can send a memo so donation forgery works"]
+    N5 --> F7["No challenge so a verifier can relay it"]
 
-    F1 --> G["Missing: trust without disclosure<br/>a live, private, unforgeable proof"]
+    F1 --> G["Missing: trust without disclosure a live, private, unforgeable proof"]
     F2 --> G
     F3 --> G
     F4 --> G
     F5 --> G
     F6 --> G
     F7 --> G
-    MG --> G2["Missing: a way to turn<br/>that proof into purchases"]
+    MG --> G2["Missing: a way to turn that proof into purchases"]
