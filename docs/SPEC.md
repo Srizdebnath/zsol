@@ -130,11 +130,16 @@ The registry never sees keys, so mass surveillance has no single choke point (P2
  `(agentId, anchorTxid)`.
 - `GET /v0/attestations/:agentId` → latest entries ascending by issuedAt with running `chainDigest`
  (`chainDigestₙ = BLAKE2b-256(chainDigestₙ₋₁ ‖ canonical(objectₙ))`, genesis = zero digest).
-- `GET /v0/health` → `{height?, ok}`.
+- `GET /v0/health` → `{height?, ok, watermarkHeight}`.
 - `entryId = hex(chainDigest)` — chain digests are position-unique (each depends on its
  predecessor), so the derivation is injective and needs no extra primitives.
 - Registry MUST reject: non-canonical objects, `claimZat < dust (10000)`, unknown `protocol`,
  duplicate `(agentId, anchorTxid)`.
+- Hardening (FR-3.4) transport slugs: `chain-descended` — a POST whose `anchorHeight` is below
+ the registry's accepted-height watermark is refused (`503 {error: "chain-descended"}`; the
+ watermark only ever advances, enforced by a physical DB trigger); `rate-limited` — per-IP
+ token bucket on POST (`429 {error: "rate-limited", retryAfterMs}`); body-size cap delivers
+ `413`. These are transport-level slugs (distinct from §9 attestation reasons).
 
 ## 8. MCP gateway tools (zsol-mcp; stdio + streamable HTTP)
 
