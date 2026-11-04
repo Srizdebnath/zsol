@@ -77,6 +77,11 @@ pub struct ToolCtx {
     pub max_anchor_retries: u32,
     pub last_anchor: Mutex<Option<AnchorRecord>>,
     pub scope: Mutex<Option<ScopeRecord>>,
+    /// FR-2.3 tracker dedupe: zallet beta.1 bumps the ZIP-32 diversifier on
+    /// EVERY `z_getaddressforaccount` call, so re-deriving per call would
+    /// permute the UA mid-session. First derivation wins for the process
+    /// lifetime — deterministic within a session, re-derived on restart.
+    pub attest_ua_cache: Mutex<Option<String>>,
 }
 
 #[derive(Debug)]
@@ -156,6 +161,7 @@ impl ToolCtx {
             max_anchor_retries,
             last_anchor: Mutex::new(None),
             scope: Mutex::new(None),
+            attest_ua_cache: Mutex::new(None),
         }))
     }
 }
@@ -383,15 +389,26 @@ pub async fn zsol_health(ctx: &ToolCtx) -> Result<Value, ToolError> {
 }
 
 async fn attest_ua(ctx: &ToolCtx) -> Result<String, ToolError> {
+    // Tracker dedupe (FR-2.3): reuse the process's first derivation so every
+    // anchor/frame in one session binds the SAME unified address. beta.1's
+    // derivation bumps the diversifier per call; caching restores the
+    // deterministic-rederive contract at the process boundary.
+    if let Some(ua) = ctx.attest_ua_cache.lock().ok().and_then(|g| g.clone()) {
+        return Ok(ua);
+    }
     let v = ctx
         .w
         .addr_for_account(ctx.cfg.attest_account, &["orchard", "sapling"])
         .await
         .map_err(|e| map_wallet_err(&e, "z_getaddressforaccount"))?;
-    deep_find_ua(&v, 5).ok_or(ToolError::slug(
+    let ua = deep_find_ua(&v, 5).ok_or(ToolError::slug(
         "wallet-shape",
         "no unified address in derivation reply",
-    ))
+    ))?;
+    if let Ok(mut g) = ctx.attest_ua_cache.lock() {
+        *g = Some(ua.clone());
+    }
+    Ok(ua)
 }
 
 fn frame_pre(
