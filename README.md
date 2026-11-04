@@ -37,150 +37,44 @@ only human step is approving the spend.
 
 ## How it works
 
-<!-- diagrams: Mermaid sources in docs/diagrams/; replaced by Excalidraw renders in docs/diagrams/img/ -->
+**The problem:** an agent must prove it can pay without exposing its balance or history. A proof
+that cannot see spends, or that a third party can forge, proves nothing, and the agent still
+cannot spend ZEC at Bitrefill.
 
-**The problem:** an agent must prove it can pay without exposing its balance or history, and a
-proof that cannot see spends, or that a third party can forge, proves nothing.
+![The problem](docs/diagrams/img/01.png)
 
-```mermaid
-flowchart TD
-    A["AI agent wants to buy<br/>from another party"] --> Q{"How does it prove<br/>it can pay?"}
-    A --> M["It holds only ZEC"]
-    M --> MB["Bitrefill and most merchants<br/>do not accept ZEC"]
-    MB --> MG["Agent cannot buy at all"]
+**The solution:** a shielded self-spend commits to the claim. One chosen verifier gets a view-only
+key, runs eight checks and keeps watching every block. The Credit Desk turns a verified claim into
+a Bitrefill purchase, repaid in shielded TAZ.
 
-    Q --> N1["Just state a balance"]
-    Q --> N2["Send a wallet screenshot"]
-    Q --> N3["Publish a transparent address"]
-    Q --> N4["Rely on a custodian's word"]
-    Q --> N5["zsol 0.1: share a UIVK"]
+![The solution](docs/diagrams/img/02.png)
 
-    N1 --> F1["Unverifiable claim"]
-    N2 --> F2["Forgeable static snapshot"]
-    N3 --> F3["Leaks the whole<br/>payment history"]
-    N4 --> F4["Custody and trust<br/>in a third party"]
-    N5 --> F5["Incoming key never sees spends<br/>so liveness can never fail"]
-    N5 --> F6["Anyone can send a memo<br/>so donation forgery works"]
-    N5 --> F7["No challenge<br/>so a verifier can relay it"]
+**Architecture and trust boundaries.** The seed, the spending keys and the `commerce` viewing key
+never leave the borrower; the registry never sees a key.
 
-    F1 --> G["Missing: trust without disclosure<br/>a live, private, unforgeable proof"]
-    F2 --> G
-    F3 --> G
-    F4 --> G
-    F5 --> G
-    F6 --> G
-    F7 --> G
-    MG --> G2["Missing: a way to turn<br/>that proof into purchases"]
-```
+![Architecture](docs/diagrams/img/03.png)
 
-**The solution:** a shielded self-spend commits to the claim; one chosen verifier gets a view-only
-key, runs eight checks, and keeps watching. The Credit Desk turns a verified claim into a
-Bitrefill purchase.
+### Anchoring an attestation
 
-```mermaid
-flowchart LR
-    subgraph AGENT["Borrower agent"]
-        A1["Anchor: shielded self-spend<br/>inside zsol-attn"]
-        A2["Memo commits to claim<br/>0xFF‖zs02‖D"]
-        A3["Present to one verifier:<br/>object, UFVK, signed nonce"]
-    end
+![Anchor sequence](docs/diagrams/img/04.png)
 
-    subgraph DESK["Credit Desk, the verifier"]
-        D1["Import UFVK view-only<br/>in its own wallet"]
-        D2["Run checks C1 to C8"]
-        D3{"Tier verified?"}
-        D4["Buy product<br/>via Bitrefill API v2"]
-        D5["Live watch<br/>every new block"]
-    end
+### Verification: checks C1–C8
 
-    A1 --> A2 --> A3 --> D1 --> D2 --> D3
-    D3 -->|"no"| X["Refused: claim-only<br/>with reason codes"]
-    D3 -->|"yes, and within LTV limit"| D4
-    D4 --> R["Gift card code<br/>handed to the agent"]
-    D4 --> D5
-    R --> P["Agent repays in shielded TAZ<br/>memo 0xFF‖zsc1‖loanId"]
-    P --> Z["Desk scan matches memo<br/>loan repaid"]
-    D5 -->|"anchored notes spent"| K["Loan at-risk<br/>new credit frozen"]
+![Verification C1–C8](docs/diagrams/img/05.png)
 
-    C["Chain observers see one<br/>opaque shielded transaction"]
-    A1 -.-> C
-```
+### Four attacks, defeated live on testnet (G3)
 
-**Architecture and trust boundaries:**
+![Attacks defeated](docs/diagrams/img/06.png)
 
-```mermaid
-flowchart TB
-    subgraph BOR["Borrower agent process"]
-        CL["Claude agent"]
-        MCP["zsol-mcp<br/>stdio or HTTP"]
-        LW["zsol-lightwallet"]
-        SEED[("seed.age<br/>age-encrypted seed")]
-        COM["Account commerce<br/>payments and repayments"]
-        ATT["Account zsol-attn<br/>funding and anchors only"]
-        NEV["Never leaves this box:<br/>seed, spending keys,<br/>commerce viewing key"]
-        CL -->|"MCP tools"| MCP
-        MCP --> LW
-        LW --> SEED
-        LW --> COM
-        LW --> ATT
-    end
+### The live credit loop (G4 + G5, real heights and txids)
 
-    subgraph DESK["Credit Desk process"]
-        CR["zsol-credit<br/>HTTP :8090"]
-        VER["zsol-verifier<br/>view-only UFVK import"]
-        TRE["Account treasury<br/>receives repayments"]
-        LOANS[("loans.sqlite<br/>loans and events")]
-        POL["credit-policy.json<br/>mode test, LTV 50%"]
-        CR --> VER
-        CR --> TRE
-        CR --> LOANS
-        CR --> POL
-    end
+![Credit loop](docs/diagrams/img/07.png)
 
-    subgraph REG["Public registry"]
-        RS["zsol-registry<br/>HTTP :8088"]
-        RDB[("Claims and digest chain<br/>no keys, no balances")]
-        RS --> RDB
-    end
+### Loan states
 
-    subgraph GW["Public verifier gateway"]
-        GWM["zsol-mcp, verifier role<br/>own view-only wallet"]
-    end
+![Loan states](docs/diagrams/img/08.png)
 
-    subgraph WEB["Web, Next.js"]
-        W1["Status page<br/>route /"]
-        W2["Registry explorer<br/>/explorer"]
-        W3["Live loan board<br/>/desk"]
-        W4["Judge self-serve<br/>/verify"]
-    end
-
-    subgraph ZC["Zcash testnet"]
-        LWD["lightwalletd<br/>testnet.zec.rocks:443"]
-        NET["NU7 active<br/>branch 0x77190ad9"]
-        LWD --- NET
-    end
-
-    BR["Bitrefill API v2<br/>test products, pay from balance"]
-    JUDGE["Judge or observer"]
-
-    MCP -->|"object + UFVK of zsol-attn<br/>+ signed challenge, direct"| CR
-    MCP -->|"claim object only"| RS
-    CR -->|"invoice and code"| BR
-    LW -->|"compact blocks, send tx"| LWD
-    VER -->|"sync from birthday"| LWD
-    GWM -->|"sync"| LWD
-    CR -->|"SSE /v0/events"| W3
-    W2 -->|"fetch claims"| RS
-    W4 -->|"relay zsol_verify"| GWM
-    JUDGE --> W4
-    JUDGE --> W2
-```
-
-More: [anchor](docs/diagrams/04-attestation-anchor.mmd) ·
-[verification C1–C8](docs/diagrams/05-verification-c1-c8.mmd) ·
-[attacks defeated live](docs/diagrams/06-attacks-defeated.mmd) ·
-[the live credit loop](docs/diagrams/07-credit-loop.mmd) ·
-[loan states](docs/diagrams/08-loan-states.mmd) — index in [`docs/diagrams/`](docs/diagrams/README.md).
+Mermaid sources for every diagram: [`docs/diagrams/`](docs/diagrams/README.md).
 
 ## Architecture
 

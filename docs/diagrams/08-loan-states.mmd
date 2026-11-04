@@ -1,13 +1,13 @@
 flowchart LR
-    START("credit_request verified<br/>Bitrefill purchase done") --> OPEN["open"]
-    OPEN -->|"repayment memo matched<br/>value at least principal"| REPAID["repaid"]
-    OPEN -->|"attestation released:<br/>anchored notes spent"| ATRISK["at-risk"]
+    START("credit_request verified Bitrefill purchase done") --> OPEN["open"]
+    OPEN -->|"repayment memo matched value at least principal"| REPAID["repaid"]
+    OPEN -->|"attestation released: anchored notes spent"| ATRISK["at-risk"]
     ATRISK -->|"repayment memo matched"| REPAID
     OPEN -->|"tip past dueHeight"| DEF["defaulted"]
     ATRISK -->|"tip past dueHeight"| DEF
 
-    ATRISK -.-> FRZ["Line frozen for this agent<br/>new requests get line-frozen"]
+    ATRISK -.-> FRZ["Line frozen for this agent new requests get line-frozen"]
     DEF -.-> FRZ
 
-    OPEN -.->|"underpaid"| SHORT["repayment-short event<br/>loan stays active"]
+    OPEN -.->|"underpaid"| SHORT["repayment-short event loan stays active"]
     ATRISK -.->|"underpaid"| SHORT

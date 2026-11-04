@@ -1,10 +1,10 @@
 flowchart LR
     subgraph ATK["Live adversarial cases, G3"]
-        G3A["G3a: attestor edits agentId<br/>after anchoring, re-signs<br/>anchor 30f12fbd…6569"]
-        G3B1["G3b-1: verifier V1 relays<br/>A's presentation to V2"]
-        G3B2["G3b-2: V1 swaps in V2's<br/>challenge, no session key"]
-        G3C["G3c: anchors 0.0299 TAZ<br/>claims 50 TAZ<br/>tx 60fc81f2…8b67"]
-        G3D["G3d: UFVK holder donates<br/>into victim's zsol-attn<br/>with its own memo<br/>tx 45f28601…be2a"]
+        G3A["G3a: attestor edits agentId after anchoring, re-signs anchor 30f12fbd…6569"]
+        G3B1["G3b-1: verifier V1 relays A's presentation to V2"]
+        G3B2["G3b-2: V1 swaps in V2's challenge, no session key"]
+        G3C["G3c: anchors 0.0299 TAZ claims 50 TAZ tx 60fc81f2…8b67"]
+        G3D["G3d: UFVK holder donates into victim's zsol-attn with its own memo tx 45f28601…be2a"]
     end
 
     G3A --> K4["C4 binding"]
@@ -16,9 +16,9 @@ flowchart LR
     K4 --> R4["memo-digest-mismatch"]
     K8 --> R8["presentation-invalid"]
     K5 --> R5["claim-exceeds-outputs"]
-    K3 --> R3["not-spent-by-account<br/>closes the 0.1 flaw F-3"]
+    K3 --> R3["not-spent-by-account closes the 0.1 flaw F-3"]
 
-    R4 --> RES["Each case fails exactly one check<br/>4 of 4 tests passed, 269 s<br/>Zcash testnet, 2026-10-27"]
+    R4 --> RES["Each case fails exactly one check 4 of 4 tests passed, 269 s Zcash testnet, 2026-10-27"]
     R8 --> RES
     R5 --> RES
     R3 --> RES

@@ -1,26 +1,26 @@
 flowchart LR
     subgraph AGENT["Borrower agent"]
-        A1["Anchor: shielded self-spend<br/>inside zsol-attn"]
-        A2["Memo commits to claim<br/>0xFF‖zs02‖D"]
-        A3["Present to one verifier:<br/>object, UFVK, signed nonce"]
+        A1["Anchor: shielded self-spend inside zsol-attn"]
+        A2["Memo commits to claim 0xFF‖zs02‖D"]
+        A3["Present to one verifier: object, UFVK, signed nonce"]
     end
 
     subgraph DESK["Credit Desk, the verifier"]
-        D1["Import UFVK view-only<br/>in its own wallet"]
+        D1["Import UFVK view-only in its own wallet"]
         D2["Run checks C1 to C8"]
         D3{"Tier verified?"}
-        D4["Buy product<br/>via Bitrefill API v2"]
-        D5["Live watch<br/>every new block"]
+        D4["Buy product via Bitrefill API v2"]
+        D5["Live watch every new block"]
     end
 
     A1 --> A2 --> A3 --> D1 --> D2 --> D3
-    D3 -->|"no"| X["Refused: claim-only<br/>with reason codes"]
+    D3 -->|"no"| X["Refused: claim-only with reason codes"]
     D3 -->|"yes, and within LTV limit"| D4
-    D4 --> R["Gift card code<br/>handed to the agent"]
+    D4 --> R["Gift card code handed to the agent"]
     D4 --> D5
-    R --> P["Agent repays in shielded TAZ<br/>memo 0xFF‖zsc1‖loanId"]
-    P --> Z["Desk scan matches memo<br/>loan repaid"]
-    D5 -->|"anchored notes spent"| K["Loan at-risk<br/>new credit frozen"]
+    R --> P["Agent repays in shielded TAZ memo 0xFF‖zsc1‖loanId"]
+    P --> Z["Desk scan matches memo loan repaid"]
+    D5 -->|"anchored notes spent"| K["Loan at-risk new credit frozen"]
 
-    C["Chain observers see one<br/>opaque shielded transaction"]
+    C["Chain observers see one opaque shielded transaction"]
     A1 -.-> C
