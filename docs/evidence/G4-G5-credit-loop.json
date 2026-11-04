@@ -1,0 +1,235 @@
+{
+  "anchor": {
+    "frameDigest": "ee1346256d3b27c3868d975aee0f9fce40ebb83428f27778f741da355fd53c74",
+    "object": {
+      "agentId": "agent-a",
+      "anchorHeight": 4546439,
+      "anchorTxid": "20ec2cc846c78dc0c9a54b8486b4212101270d1d4211323852f275032d0300ef",
+      "birthday": 4544845,
+      "claimZat": 50000000,
+      "issuedAt": 1793078697,
+      "maxAgeHours": 24,
+      "memoBinding": "_3pzMDLuE0YlbTsnw4aNl1ruD5_OQOu4NCjyd3j3Qdo1X9U8dA",
+      "network": "test",
+      "pool": "ironwood",
+      "protocol": "zsol/0.2",
+      "sessionKey": "32b-2q_EkITTXIbWRaZUcpxkOAEvwWgCBZBfvqwGOqo"
+    },
+    "objectB64u": "eyJhZ2VudElkIjoiYWdlbnQtYSIsImFuY2hvckhlaWdodCI6NDU0NjQzOSwiYW5jaG9yVHhpZCI6IjIwZWMyY2M4NDZjNzhkYzBjOWE1NGI4NDg2YjQyMTIxMDEyNzBkMWQ0MjExMzIzODUyZjI3NTAzMmQwMzAwZWYiLCJiaXJ0aGRheSI6NDU0NDg0NSwiY2xhaW1aYXQiOjUwMDAwMDAwLCJpc3N1ZWRBdCI6MTc5MzA3ODY5NywibWF4QWdlSG91cnMiOjI0LCJtZW1vQmluZGluZyI6Il8zcHpNREx1RTBZbGJUc253NGFObDFydUQ1X09RT3U0TkNqeWQzajNRZG8xWDlVOGRBIiwibmV0d29yayI6InRlc3QiLCJwb29sIjoiaXJvbndvb2QiLCJwcm90b2NvbCI6Inpzb2wvMC4yIiwic2Vzc2lvbktleSI6IjMyYi0ycV9Fa0lUVFhJYldSYVpVY3B4a09BRXZ3V2dDQlpCZnZxd0dPcW8ifQ",
+    "secondsToMine": 157
+  },
+  "creditRequest": {
+    "loan": {
+      "agentId": "agent-a",
+      "anchorTxid": "20ec2cc846c78dc0c9a54b8486b4212101270d1d4211323852f275032d0300ef",
+      "bitrefillInvoiceId": "b46f2eb7-c7a8-4f07-a2d9-35de7084b0b2",
+      "bitrefillOrderId": "6ae03697764a4d8e872c0d6c",
+      "createdAt": 1793078936,
+      "dueHeight": 4549898,
+      "id": "71b26fe08e382fa6544035ddf182b0ed",
+      "memoHex": "ff7a73633171b26fe08e382fa6544035ddf182b0ed",
+      "objectB64u": "eyJhZ2VudElkIjoiYWdlbnQtYSIsImFuY2hvckhlaWdodCI6NDU0NjQzOSwiYW5jaG9yVHhpZCI6IjIwZWMyY2M4NDZjNzhkYzBjOWE1NGI4NDg2YjQyMTIxMDEyNzBkMWQ0MjExMzIzODUyZjI3NTAzMmQwMzAwZWYiLCJiaXJ0aGRheSI6NDU0NDg0NSwiY2xhaW1aYXQiOjUwMDAwMDAwLCJpc3N1ZWRBdCI6MTc5MzA3ODY5NywibWF4QWdlSG91cnMiOjI0LCJtZW1vQmluZGluZyI6Il8zcHpNREx1RTBZbGJUc253NGFObDFydUQ1X09RT3U0TkNqeWQzajNRZG8xWDlVOGRBIiwibmV0d29yayI6InRlc3QiLCJwb29sIjoiaXJvbndvb2QiLCJwcm90b2NvbCI6Inpzb2wvMC4yIiwic2Vzc2lvbktleSI6IjMyYi0ycV9Fa0lUVFhJYldSYVpVY3B4a09BRXZ3V2dDQlpCZnZxd0dPcW8ifQ",
+      "openedHeight": 4546442,
+      "principalZat": 820931,
+      "productId": "test-gift-card-code",
+      "rateAt": 1793078934,
+      "rateSource": "kraken:XZECZUSD/last",
+      "repaidTxid": null,
+      "status": "open",
+      "updatedAt": 1793078936,
+      "usdPerZec": 1218.13,
+      "valueUsd": 10.0
+    },
+    "redemption": {
+      "code": "<redacted: delivered by Bitrefill>",
+      "note": "full payload kept out of the repo"
+    },
+    "repay": {
+      "memoHex": "ff7a73633171b26fe08e382fa6544035ddf182b0ed",
+      "zat": 820931
+    },
+    "report": {
+      "agentId": "agent-a",
+      "anchorTxid": "20ec2cc846c78dc0c9a54b8486b4212101270d1d4211323852f275032d0300ef",
+      "anchoredZat": 84970000,
+      "checks": [
+        {
+          "check": "C1 protocol",
+          "code": "ok",
+          "detail": "zsol/0.2 on test pool ironwood",
+          "ok": true
+        },
+        {
+          "check": "C2 anchor mined",
+          "code": "ok",
+          "detail": "mined at 4546439, 4 confirmations",
+          "ok": true
+        },
+        {
+          "check": "C3 spend authority",
+          "code": "ok",
+          "detail": "anchor spends 1 note(s) owned by the shared account",
+          "ok": true
+        },
+        {
+          "check": "C4 binding",
+          "code": "ok",
+          "detail": "memo 0xFF\u2016zs02\u2016ee134625\u2026 matches the recomputed frame digest",
+          "ok": true
+        },
+        {
+          "check": "C5 value",
+          "code": "ok",
+          "detail": "84970000 zat anchored \u2265 50000000 claimed",
+          "ok": true
+        },
+        {
+          "check": "C6 liveness",
+          "code": "ok",
+          "detail": "2 anchored note(s) unspent at height 4546442",
+          "ok": true
+        },
+        {
+          "check": "C7 freshness",
+          "code": "ok",
+          "detail": "issued 229s ago, horizon 24h",
+          "ok": true
+        },
+        {
+          "check": "C8 presentation",
+          "code": "ok",
+          "detail": "Ed25519 signature by sessionKey over this verifier's nonce",
+          "ok": true
+        }
+      ],
+      "claimZat": 50000000,
+      "notes": [
+        {
+          "binding": false,
+          "outputIndex": 0,
+          "pool": "ironwood",
+          "spentHeight": null,
+          "spentInTxid": null,
+          "valueZat": 34970000
+        },
+        {
+          "binding": true,
+          "outputIndex": 1,
+          "pool": "ironwood",
+          "spentHeight": null,
+          "spentInTxid": null,
+          "valueZat": 50000000
+        }
+      ],
+      "reasons": [],
+      "scannedHeight": 4546442,
+      "tier": "verified",
+      "tipHeight": 4546442,
+      "verifiedAt": 1793078926
+    }
+  },
+  "release": {
+    "movedZat": 89970000,
+    "note": "every verifier watching this attestation will see it released within one block",
+    "txid": "8657a142cf9feabd6efa4ab229ccfd8693cb0260f8bf7dca132a58d84d3499ee"
+  },
+  "repay": {
+    "from": "commerce",
+    "loanId": "71b26fe08e382fa6544035ddf182b0ed",
+    "paidZat": 820931,
+    "txid": "a66d965f136b11b5c54014edc32154a2fb87727274fa515f23a0ae9eeb6cbc37"
+  },
+  "deskBook": {
+    "events": [
+      {
+        "at": 1793079222,
+        "detail": {
+          "txid": "a66d965f136b11b5c54014edc32154a2fb87727274fa515f23a0ae9eeb6cbc37",
+          "valueZat": 820931
+        },
+        "height": 4546455,
+        "id": 5,
+        "kind": "loan-repaid",
+        "loanId": "71b26fe08e382fa6544035ddf182b0ed"
+      },
+      {
+        "at": 1793079075,
+        "detail": {
+          "agentId": "agent-a",
+          "newStatus": "at-risk",
+          "spentInTxid": "8657a142cf9feabd6efa4ab229ccfd8693cb0260f8bf7dca132a58d84d3499ee"
+        },
+        "height": 4546446,
+        "id": 4,
+        "kind": "attestation-released",
+        "loanId": "71b26fe08e382fa6544035ddf182b0ed"
+      },
+      {
+        "at": 1793078936,
+        "detail": {
+          "agentId": "agent-a",
+          "bitrefillInvoiceId": "b46f2eb7-c7a8-4f07-a2d9-35de7084b0b2",
+          "dueHeight": 4549898,
+          "principalZat": 820931,
+          "product": "test-gift-card-code",
+          "valueUsd": 10
+        },
+        "height": 4546442,
+        "id": 3,
+        "kind": "loan-opened",
+        "loanId": "71b26fe08e382fa6544035ddf182b0ed"
+      },
+      {
+        "at": 1793078932,
+        "detail": {
+          "agentId": "agent-a",
+          "anchorTxid": "20ec2cc846c78dc0c9a54b8486b4212101270d1d4211323852f275032d0300ef",
+          "anchoredZat": 84970000,
+          "reasons": [],
+          "tier": "verified"
+        },
+        "height": 4546442,
+        "id": 2,
+        "kind": "verification",
+        "loanId": null
+      },
+      {
+        "at": 1793078873,
+        "detail": {
+          "agentId": "agent-a",
+          "anchorTxid": "20ec2cc846c78dc0c9a54b8486b4212101270d1d4211323852f275032d0300ef",
+          "anchoredZat": 84970000,
+          "reasons": [],
+          "tier": "verified"
+        },
+        "height": 4546439,
+        "id": 1,
+        "kind": "verification",
+        "loanId": null
+      }
+    ],
+    "loans": [
+      {
+        "agentId": "agent-a",
+        "anchorTxid": "20ec2cc846c78dc0c9a54b8486b4212101270d1d4211323852f275032d0300ef",
+        "bitrefillInvoiceId": "b46f2eb7-c7a8-4f07-a2d9-35de7084b0b2",
+        "bitrefillOrderId": "6ae03697764a4d8e872c0d6c",
+        "createdAt": 1793078936,
+        "dueHeight": 4549898,
+        "id": "71b26fe08e382fa6544035ddf182b0ed",
+        "memoHex": "ff7a73633171b26fe08e382fa6544035ddf182b0ed",
+        "objectB64u": "eyJhZ2VudElkIjoiYWdlbnQtYSIsImFuY2hvckhlaWdodCI6NDU0NjQzOSwiYW5jaG9yVHhpZCI6IjIwZWMyY2M4NDZjNzhkYzBjOWE1NGI4NDg2YjQyMTIxMDEyNzBkMWQ0MjExMzIzODUyZjI3NTAzMmQwMzAwZWYiLCJiaXJ0aGRheSI6NDU0NDg0NSwiY2xhaW1aYXQiOjUwMDAwMDAwLCJpc3N1ZWRBdCI6MTc5MzA3ODY5NywibWF4QWdlSG91cnMiOjI0LCJtZW1vQmluZGluZyI6Il8zcHpNREx1RTBZbGJUc253NGFObDFydUQ1X09RT3U0TkNqeWQzajNRZG8xWDlVOGRBIiwibmV0d29yayI6InRlc3QiLCJwb29sIjoiaXJvbndvb2QiLCJwcm90b2NvbCI6Inpzb2wvMC4yIiwic2Vzc2lvbktleSI6IjMyYi0ycV9Fa0lUVFhJYldSYVpVY3B4a09BRXZ3V2dDQlpCZnZxd0dPcW8ifQ",
+        "openedHeight": 4546442,
+        "principalZat": 820931,
+        "productId": "test-gift-card-code",
+        "rateAt": 1793078934,
+        "rateSource": "kraken:XZECZUSD/last",
+        "repaidTxid": "a66d965f136b11b5c54014edc32154a2fb87727274fa515f23a0ae9eeb6cbc37",
+        "status": "repaid",
+        "updatedAt": 1793079222,
+        "usdPerZec": 1218.13,
+        "valueUsd": 10.0
+      }
+    ]
+  }
+}

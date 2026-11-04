@@ -1,5 +1,7 @@
 # zsol OPERATIONS — testnet runbook (no tribal steps, no fake steps)
 
+> **Superseded (2026-10-26):** this document describes protocol 0.1. See [`SRS.md`](SRS.md) v2.0, [`SPEC.md`](SPEC.md) 0.2, [`BUILD_PLAN.md`](BUILD_PLAN.md) and [`FINDINGS.md`](FINDINGS.md). It will be rewritten as each part is implemented.
+
 > Truths: Z3 README (two-phase testnet boot), Z3 attach-your-own-service docs, SoChain zectest
 > explorer, community faucets. Execute gates G0–G4 with real evidence to `docs/evidence/`.
 

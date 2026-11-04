@@ -1,5 +1,7 @@
 # zsol demo topology (T-41, FR-5.2)
 
+> **Superseded (2026-10-26):** this document describes protocol 0.1. See [`SRS.md`](SRS.md) v2.0, [`SPEC.md`](SPEC.md) 0.2, [`BUILD_PLAN.md`](BUILD_PLAN.md) and [`FINDINGS.md`](FINDINGS.md). It will be rewritten as each part is implemented.
+
 Canonical mapping of roles to machines/services for the FR-5.x demo and the
 G4 gate. Two independent Zallet instances — never a shared wallet.
 
