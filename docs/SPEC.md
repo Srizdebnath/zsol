@@ -1,183 +1,229 @@
 # zsol Protocol Specification
 
-**Version:** 0.1.0 · **Asset:** ZEC (Sapling/Ironwood shielded pools), unit **zatoshi** = 10⁻⁸ ZEC
-**Stack of record:** Z3 testnet (Zebra 7, Zaino, Zallet beta) · **Status:** implementation-reference
+**Version:** 0.2.0 · **Asset:** ZEC (Ironwood and Sapling shielded pools), unit **zatoshi** = 10⁻⁸ ZEC
+**Network of record:** Zcash **testnet, post-NU7** (activation height 4,465,026, consensus branch
+`0x77190ad9`, 25-second target spacing) · **Status:** implementation-reference
+**Supersedes:** 0.1.0. See [`FINDINGS.md`](FINDINGS.md) for why 0.1 was unsound.
 
 ---
 
 ## 0. Purpose
 
-Define a **proof-of-funds attestation** primitive for AI agents: agent A proves to counterparty
-agent B that *"I control ≥ B zatoshi at height H"* — with **public chain indistinguishability**
-and **no disclosure of identity/commerce history**. Companion: [`SRS.md`](SRS.md) (requirements),
-[`ARCHITECTURE.md`](ARCHITECTURE.md) (internals).
+An attestor agent **A** proves to a verifier agent **V** that
 
-## 1. Non-negotiable principles
+> *"the holder of session key `K` controls unspent shielded notes worth ≥ B zatoshi, and will
+> keep controlling them until you see otherwise"*
+
+with these guarantees:
+
+- **Chain observers learn nothing.** The anchor is an ordinary fully-shielded transaction.
+- **V learns only the dedicated attestation account.** V never sees A's commerce account.
+- **V can detect the moment the attested funds move**, so the proof is live rather than a
+  snapshot.
+
+## 1. Principles
 
 | # | Principle | Prevents |
 |---|-----------|----------|
-| P1 | **Shielded-only payment/attestation path.** Anchors are fully-shielded z→z transfers. No transparent addresses anywhere in protocol paths. | Public linkage of attestation identity. |
-| P2 | **Non-custodial.** All keys live in the agent's own Zallet wallet. Nothing else holds key material. Registry stores claims only, **never** keys. | Registry/server compromise = fund theft. |
-| P3 | **No invented cryptography.** Zcash has no unified message-signing standard; zsol does NOT introduce signatures outside consensus. Binding is achieved with *existing* primitives: memos inside encrypted outputs (encrypted at rest; readable only by viewing-key holders) + one-way digests + viewing-key scans. | Spec hallucination → unimplementable. |
-| P4 | **Dedicated attestation account.** All anchors live in a ZIP-32 sub-account (`zsol-attn`, default #9) separate from the agent's commerce account (#0). Scope of any shared viewing key is bounded to attestation history only. | Commerce graph leak via over-broad key sharing. |
-| P5 | **Compute-what-you-claim.** Verification recomputes every fact from chain + wallet data; the registry is evidence *about claims*, never the source of truth. | Trusting a server. |
-| P6 | **Amounts are zatoshi integers** everywhere on the wire; ZEC strings only at UI boundaries. | Float drift / footguns. |
+| P1 | **Shielded-only.** Anchors are fully shielded. No transparent address appears in any protocol path. | Public linkage. |
+| P2 | **Non-custodial.** Spending keys stay in A's own wallet. The registry and underwriters never hold keys. | Server compromise turning into theft. |
+| P3 | **Standard primitives only.** Zcash consensus (spend authorization, nullifiers), BLAKE2b-256, ZIP-302 memos, ZIP-316 UFVKs, Ed25519 (RFC 8032). Nothing bespoke. | Unimplementable or unaudited cryptography. |
+| P4 | **Dedicated attestation account.** Anchors live in a ZIP-32 account used only for attestation. | Commerce history leaking through a shared key. |
+| P5 | **Recompute everything.** The verifier derives every fact from chain data plus its own view-only scan. The registry is evidence *about* claims, never the truth. | Trusting a server. |
+| P6 | **Integers on the wire.** Amounts are zatoshi `u64`. Conversion to ZEC or USD happens only at the UI edge. | Float drift. |
 
 ## 2. Actors
 
-- **Attestor agent (A)** — holds a Zallet with accounts #0 (commerce) and `zsol-attn` (#9 default).
-- **Verifier agent (B)** — counterparty; holds its own Zallet on some node; receives scoped keys.
-- **Registry (C)** — public service storing **claim-tier** objects only (append-only, digest-chained).
-- **Operator (H)** — human supervising A (and optionally B).
+- **Attestor (A).** An agent with its own wallet. Account `commerce` is never shared. Account
+  `zsol-attn` is the dedicated attestation account.
+- **Verifier (V).** Any counterparty with chain access. In the Credit Desk (§11) the verifier is
+  the **underwriter**.
+- **Registry (R).** An optional public, append-only, digest-chained store of claim-tier objects.
+- **Chain access.** A lightwalletd-protocol endpoint (public `testnet.zec.rocks:443`, or local
+  Zaino) or a local Zebra node. Every party chooses its own.
 
-## 3. Account model (critical to the privacy promise)
+## 3. Account model
 
 ```
-Zallet wallet of agent A
-├── account #0            ← commerce (never attested, never view-key-shared)
-└── account "zsol-attn"   ← attestation account (default #9)
-      └── anchors: self-spends of ≥ B zatoshi to itself
+A's wallet (seed held by A only)
+├── account "commerce"   ← payments, repayments; never shared, never attested
+└── account "zsol-attn"  ← receives funding; makes anchor self-spends; nothing else
+       UFVK(zsol-attn) is what V receives
 ```
 
-Sharing the uivk of `zsol-attn` reveals: its anchor self-spends, its balances over time,
-its addresses' internal history. It reveals **nothing** about account #0. Per-verifier
-finer scoping is possible (account `zsol-attn-v1|-v2|...`) at the cost of more scanning —
-the MCP tooling supports it (SRS FR-3.4).
+**What a UFVK reveals (normative disclosure).** Every note received by `zsol-attn` since its
+birthday, including value, memo and spent-state. It also reveals every output *sent* by
+`zsol-attn` (via its outgoing viewing key), including recipient and value. It reveals nothing
+about any other account derived from the same seed. Operational rule: `zsol-attn` only receives
+funding and only makes anchors.
+
+Version 0.1 shared an incoming viewing key (UIVK). That key cannot see spends, so a balance check
+based on it is meaningless. A full viewing key (UFVK) is the *minimum* key that can prove
+liveness. See FINDINGS F-1.
 
 ## 4. Attestation object (wire)
 
-JSON, compact, base64url-transportable (`b64u`). Canonical form = key-sorted, no whitespace.
+Canonical form is JSON with keys sorted and no whitespace. It is transported as base64url without
+padding (`b64u`).
 
 ```jsonc
 {
-  "protocol": "zsol/0.1",
-  "agentId": "agent-0001",                // public label; NOT an address
-  "claimZat": 100000000,                  // "≥ B" in zatoshi (integer)
-  "anchorHeight": 4510000,                // chain height of anchor
-  "anchorTxid": "<64-hex>",
-  "accountUa": "u1<unified address of zsol-attn primary diversified UA>",
-  "memoBinding": "b64u(<raw memo bytes>)", // anchor memo, see §5
-  "issuedAt": 1769337600,
-  "maxAgeHours": 24                       // continuity horizon (T2)
+  "protocol":    "zsol/0.2",
+  "network":     "test",                 // "test" | "main"
+  "agentId":     "agent-0001",           // public label, not an address
+  "claimZat":    10000000,               // B, the claimed amount (u64)
+  "pool":        "ironwood",             // "ironwood" | "sapling"
+  "sessionKey":  "<b64u 32-byte Ed25519 public key>",
+  "birthday":    4540000,                // zsol-attn birthday height (scan start for V)
+  "issuedAt":    1793000000,             // unix seconds
+  "maxAgeHours": 24,
+  "anchorTxid":  "<64 hex, display byte order>",
+  "anchorHeight":4544800,
+  "memoBinding": "<b64u of the 37 significant memo bytes>"
 }
 ```
 
-**Object digest** `D = BLAKE2b-256("zsol/0.1" ‖ 0x1f ‖ canonical(object \ {memoBinding, anchorTxid, anchorHeight}))` —
-the **frame digest** over everything knowable at memo-write time (protocol tag, agentId, claimZat,
-accountUa, issuedAt, maxAgeHours). The exclusion makes the anchor-memo fixed point computable: the
-memo is written *before* the anchor is mined, so D cannot depend on `anchorTxid`/`anchorHeight`,
-and D carries the memo itself. What each excluded field is bound by instead:
-- `memoBinding`: direct byte-equality against the on-chain scanned memo (§5/§6).
-- `anchorTxid`: the verifier's scan observes that exact txid carrying that exact memo — writing
- memos into an account requires that account's spend authority (P3).
-- `anchorHeight`: memo.height == object.anchorHeight, read from the scanned memo of that txid.
+**Frame** = the object without `anchorTxid`, `anchorHeight` and `memoBinding`. These are exactly
+the fields knowable before the anchor is broadcast.
 
-**t0 claim tier:** object published to registry alone. Registry freshness/tamper-evidence only;
-**no solvency established yet** (this is what public claim means — honest by design).
+**Frame digest**: `D = BLAKE2b-256(personal = "zsol/0.2-frame\0\0", canonical(frame))`. The
+personalization string is 16 bytes, NUL-padded.
 
-## 5. Anchor transaction (the cryptographic core)
+## 5. Anchor transaction
 
-The anchor is produced via Zallet `z_sendmany` **by the agent's own wallet**:
+A builds and broadcasts a transaction from `zsol-attn` to `zsol-attn`:
 
-- Recipients: 1 output, **the same account's own diversified UA** (self-spend), value ≥ B zatoshis.
-- Memo of that output: raw anchor-memo bytes, layout `zs01(4) ‖ ver(1) ‖ height_LE64(8) ‖ digest(32)`
-*right-padded* to 512 bytes by the wallet (or as far as the wallet requires; the exact zero-pad
-border is the wallet's ZIP-302/ memo policy — verifier parses the first 45 bytes only).
-- Amounts: encrypted on chain (z→z). Fee: standard shielded fee, paid *from* the attestation account.
-- **Balance appears unchanged** (in == out), so an anchor never "spends" the attested funds.
+- **Inputs:** notes of `zsol-attn` in the declared `pool`.
+- **Binding output:** one output to a `zsol-attn` address in `pool` carrying the memo
+  `0xFF ‖ "zs02" ‖ D`, right-padded with zeros to 512 bytes. The leading `0xFF` marks
+  "arbitrary data, not text" under ZIP-302.
+- **Anchored notes** are all outputs of this transaction received by `zsol-attn`. Their sum must
+  be ≥ `claimZat`.
+- **Fee** follows ZIP-317 and is paid from `zsol-attn`. The anchored value is the tracked
+  quantity, so the fee does not affect the claim.
 
-Memo height semantics: the memo's `height` field is the attestor's **anchor window height `h*`**
-(estimated tip+1 at send time). If the tx mines with a different height, the attestor re-anchors
-(deterministic retry, funds unaffected since in == out); the published `anchorHeight` is the
-height of the *mined* anchor when height-lookup verbs are pinned at boot, otherwise the window
-height with the fallback recorded as evidence (documented, honest — never marketed as exact).
-"Wait — self-spend input/output sums: the transfer spends notes worth ≥ B and returns ≥ B to the same
-account; thermodynamically the attested balance remains. Verifier checks current balance ≥ B *at
-scan time* (§6), not just at anchor.
+The anchor costs one fee and roughly one block (≈25 s on post-NU7 testnet). A can attest any
+amount ≤ the anchored sum to any number of verifiers from a single anchor (§7). A needs a new
+anchor only to change the frame, for example a new `sessionKey` or a larger claim.
 
-**Binding:** `memoBinding` inside the object *is* the anchor memo — an attacker cannot produce
-`{object, memoBinding}` for another agent's anchor because re-computing D over a *forged* object
-never matches the real memo bytes, and reading/writing anchor memos requires spend/scan authority
-of *that* account (P3). Replay/second-use: anchors are naturally one-shot per claim level — an
-anchor with outputs ≥ B satisfies any claim ≤ B; two different claims of different sizes need
-different anchors; claim-specific digests prevent an attacker from editing the claim while
-reusing an anchor memo.
+## 6. Verification (performed entirely by V's own stack)
 
-## 6. Verification (tiers) — performed by the verifier's own stack
+V receives `{object, ufvk}` over a direct channel. The registry never carries a UFVK. V then
+imports the UFVK as a **view-only account** with `birthday` as the scan start, syncs to tip, and
+evaluates:
 
-Verifier (human or agent) holds per-agent material sent over a **direct channel** (MCP tool
-`zsol_share_scope` transfers object + scoped uivk). Verifier imports uivk into its own Zallet
-(`z_importkey`), scans to tip, and evaluates:
+| # | Check | Fails with |
+|---|-------|-----------|
+| C1 | `protocol`, `network` and `pool` recognised; `claimZat ≥ 10_000` | `protocol-unknown` / `network-mismatch` / `dust-claim` |
+| C2 | `anchorTxid` is mined at `anchorHeight` with depth ≥ `minConf` (default 1) | `anchor-not-mined` |
+| C3 | **Spend authority.** At least one nullifier revealed by the anchor tx equals the nullifier of a note V's scan attributes to `zsol-attn`. Consensus requires a valid spend-authorization signature for every spend, so only the holder of `zsol-attn`'s spending key could have produced this transaction. | `not-spent-by-account` |
+| C4 | **Binding.** Exactly one anchor output decrypts under the UFVK with memo bytes `0xFF‖"zs02"‖D'`, where `D'` is recomputed from the presented object, `D' = D`, and the bytes equal `memoBinding` | `memo-digest-mismatch` |
+| C5 | Sum of anchored notes (in `pool`) ≥ `claimZat` | `claim-exceeds-outputs` |
+| C6 | **Liveness.** No anchored note's nullifier appears on chain up to V's synced tip | `anchored-note-spent` |
+| C7 | `now − issuedAt ≤ maxAgeHours·3600`, and `issuedAt ≤ blocktime(anchorHeight) + 7200` | `stale-attestation` |
+| C8 | **Presentation (§7).** A valid Ed25519 signature by `sessionKey` over V's challenge | `presentation-invalid` |
 
-| Check (all must pass for T1 "verified") | Source of truth |
+Tiers:
+
+- **`verified`**: C1–C8 all pass.
+- **`claim-only`**: anything less, reported with every failing check's code.
+- **`live`**: `verified` while V keeps watching (§8). It drops to `released` when C6 starts to
+  fail.
+
+**Why C3 matters.** Anyone who knows a `zsol-attn` address can *send* it a note with any memo.
+Version 0.1 wrongly assumed that writing a memo required spend authority (FINDINGS F-3). Without
+C3, a past verifier holding the UFVK could donate B to the account and bind *its own*
+`sessionKey`. C3 closes that because the anchor must consume `zsol-attn`'s own notes.
+
+## 7. Presentation (challenge-response)
+
+This step stops relay attacks, where V₁ re-presents A's object and UFVK to V₂ (FINDINGS F-4).
+
+1. V → A: `challenge = {nonce: 32 random bytes, verifierId, expiresAt}`.
+2. A → V: `sig = Ed25519.sign(sessionSecret, msg)`, where
+   `msg = "zsol/0.2-present" ‖ D ‖ anchorTxid(32, internal order) ‖ nonce ‖ u64le(expiresAt) ‖ utf8(verifierId)`.
+3. V checks the signature against `sessionKey` from the object. Because `sessionKey` is inside
+   `D`, and C3 proves `D` was committed by the spending-key holder, a valid signature proves the
+   presenter is the party that committed the anchor.
+
+The session secret lives with A's agent process. Rotating it requires a new anchor.
+
+## 8. Live solvency watch
+
+While V maintains interest (an open quote, an outstanding credit line), it keeps its view-only
+account synced and re-evaluates C6 on every new block. Events:
+
+- `attestation.live` `{entryId, height}` is emitted on each block where C1–C8 still hold.
+- `attestation.released` `{entryId, height, reason: "anchored-note-spent"}` is emitted the first
+  block an anchored nullifier is seen.
+- `attestation.expired` `{entryId}` is emitted when C7 fails.
+
+Withdrawal is A's revocation primitive. A can end an attestation at any time by spending the
+anchored notes, and every watching verifier sees it within one block. **This is not escrow**:
+zsol makes solvency *observable*, not *locked*.
+
+## 9. Registry wire (public claims only)
+
+- `POST /v0/attestations {object: b64u}` returns `201 {entryId, chainDigest}`. Entries are
+  unique on `(agentId, anchorTxid)`.
+- `GET /v0/attestations/:agentId` returns entries ascending, each with a running `chainDigest`.
+  The formula is `chainDigestₙ = BLAKE2b-256(chainDigestₙ₋₁ ‖ canonical(objectₙ))`, where the
+  genesis digest is 32 zero bytes. `entryId = hex(chainDigest)`.
+- `GET /v0/health` returns `{ok, tipHeight, watermarkHeight, protocol}`.
+- Rejections: non-canonical body; unknown `protocol` or `network`; `claimZat < 10_000`;
+  duplicate; any field named like a key (`ufvk`, `uivk`, `seed`, `sk`). Transport slugs:
+  `413`; `429 rate-limited`; `503 chain-descended`.
+
+## 10. Reason codes
+
+`ok · claim-only · protocol-unknown · network-mismatch · dust-claim · anchor-not-mined ·
+not-spent-by-account · memo-digest-mismatch · claim-exceeds-outputs · anchored-note-spent ·
+stale-attestation · presentation-invalid · ufvk-invalid · scan-incomplete · chain-unreachable ·
+registry-unreachable`
+
+## 11. Credit Desk extension (`zsol-credit/0.1`)
+
+The Credit Desk is a concrete market for §6. **U** is an underwriter agent holding a Bitrefill
+account balance and its own Zcash wallet. **A** is a borrower agent that holds only ZEC (Bitrefill
+does not accept ZEC as payment).
+
+1. `credit.open` (A → U): `{object, ufvk, product: {id, value, currency}}`.
+2. U issues a challenge (§7). A signs it. U runs C1–C8. Anything other than `verified` is
+   refused with the reason codes.
+3. **Limit.** `limitZat = floor(Σ anchored × ltvBps / 10_000) − outstandingZat(A)`, where
+   `ltvBps` comes from the policy file. Pricing in USD uses a recorded reference rate, and the
+   source and timestamp are stored with the loan.
+4. U buys the product through Bitrefill (MCP `buy-products` or REST v2 `POST /invoices`). In
+   **testnet mode** only Bitrefill's official test products are allowed (`payment_method=balance`,
+   no money moves). **Live mode** requires an operator flag plus a per-loan USD cap.
+5. U → A: `{loanId, redemption, principalZat, dueHeight, repayTo: U's UA, memo: 0xFF‖"zsc1"‖loanId}`.
+6. A repays from `commerce` (never `zsol-attn`) with a shielded transfer carrying that memo. U's
+   wallet scan matches the memo, and the loan becomes `repaid`.
+7. While the loan is open U watches A's attestation (§8). On `attestation.released` the loan
+   becomes `at-risk` and A's line is frozen. Past `dueHeight` without repayment, the loan becomes
+   `defaulted`.
+
+Loan states: `open → repaid` · `open → at-risk → repaid | defaulted` · `open → defaulted`.
+
+## 12. Threat model
+
+| Adversary | Outcome |
 |---|---|
-| anchor txid is mined, confirms ≥ 1 | Zebra/registry chain RPC |
-| tx appears **within the imported uivk's account** as a self-spend (all outputs are the account's own diversifiers) | Zallet scan result / `z_viewtransaction` |
-| sum of shielded outputs of the anchor tx ≥ `claimZat` | wallet view of tx |
-| memo bytes of the anchor **re-parse & match**: `tag=zs01, ver=01, height=anchorHeight, digest=D(object)` | wallet view (decrypt with uivk) |
-| account balance ≥ claimZat **at scan time** | Zallet balance scan |
-| `issuedAt` fresh w.r.t. `maxAgeHours` (T2 continuity) | wall clock |
+| Chain observer | Sees one shielded transaction. No label, no amount, no linkage. |
+| Curious registry | Sees claims (agentId, claimZat, txid). Cannot compute any balance. Never receives keys. |
+| Attestor who spends after attesting | Caught by C6 within one block of V's sync (§8). |
+| Third party holding the UFVK (e.g. an earlier verifier) | Cannot pass C3 (needs the spending key) or C8 (needs the session secret). |
+| Relaying verifier | Cannot pass C8 for a fresh nonce. |
+| Malicious verifier | Learns the `zsol-attn` history, which is bounded and disclosed (§3). Cannot spend. Cannot be revoked; the mitigation is a fresh account per relationship. |
+| Malicious underwriter | Can refuse credit or mis-report its own Bitrefill purchase. Can never move A's funds. |
 
-Failure ⇒ tier stays "claim" with a machine-readable reason (SRS FR-1.x lists error codes).
+**Not claimed:** escrow, atomic delivery-versus-payment, cross-pool aggregation, mainnet
+readiness, or that `agentId` identifies a legal person.
 
-**Revocation honesty:** viewing keys cannot be un-shared. zsol treats scope hygiene as *process*
-(small dedicated account, per-verifier sub-accounts) rather than pretending crypto revocation.
-The registry never sees keys, so mass surveillance has no single choke point (P2/P4).
+## 13. References
 
-## 7. Registry wire (public claims only)
-
-- `POST /v0/attestations` body: `{object: b64u}` → `201 {entryId, chainDigest}`; dedupe unique on
- `(agentId, anchorTxid)`.
-- `GET /v0/attestations/:agentId` → latest entries ascending by issuedAt with running `chainDigest`
- (`chainDigestₙ = BLAKE2b-256(chainDigestₙ₋₁ ‖ canonical(objectₙ))`, genesis = zero digest).
-- `GET /v0/health` → `{height?, ok, watermarkHeight}`.
-- `entryId = hex(chainDigest)` — chain digests are position-unique (each depends on its
- predecessor), so the derivation is injective and needs no extra primitives.
-- Registry MUST reject: non-canonical objects, `claimZat < dust (10000)`, unknown `protocol`,
- duplicate `(agentId, anchorTxid)`.
-- Hardening (FR-3.4) transport slugs: `chain-descended` — a POST whose `anchorHeight` is below
- the registry's accepted-height watermark is refused (`503 {error: "chain-descended"}`; the
- watermark only ever advances, enforced by a physical DB trigger); `rate-limited` — per-IP
- token bucket on POST (`429 {error: "rate-limited", retryAfterMs}`); body-size cap delivers
- `413`. These are transport-level slugs (distinct from §9 attestation reasons).
-
-## 8. MCP gateway tools (zsol-mcp; stdio + streamable HTTP)
-
-| Tool | Side | Args → Result |
-|---|------|----------------|
-| `zsol_health` | both | stack status: zebra ready / zallet verbs pinned / registry reachable / height |
-| `zsol_prepare_anchor` | attestor | `claimZat` → checks account balance ≥ claim + floor, returns planned anchor shape (dry run) |
-| `zsol_anchor` | attestor | `claimZat` + `agentId` (agentId is REQUIRED — it feeds the frame digest) → performs self-spend via Zallet, awaits op result, returns txid + height (waits confirmations) |
-| `zsol_make_attestation` | attestor | `claimZat` → derives object incl. memo binding from last anchor; returns object b64u |
-| `zsol_publish` | attestor | object → `POST` registry, returns entryId |
-| `zsol_share_scope` | attestor | peer label → exports scoped uivk of the dedicated account (never account #0; SRS invariant 5) |
-| `zsol_import_scope` | verifier | uivk + label → imports into verifier Zallet, returns scan summary (counts only) |
-| `zsol_verify` | verifier | object b64u → runs §6 checks; returns tier + per-check results |
-| `zsol_registry_fetch` | verifier | agentId → registry entries (claim tier) |
-
-## 9. Reason codes (machine-readable)
-
-`ok · claim-only · anchor-not-mined · not-self-spend · claim-exceeds-outputs · memo-digest-mismatch ·
-balance-below-claim · stale-attestation · uivk-unavailable · protocol-unknown · registry-unreachable ·
-wallet-unreachable · dust-claim`.
-
-## 10. Threat model & what we intentionally do NOT claim
-
-| Adversary | zsol defense |
-|---|---|
-| Chain observer | anchors are indistinguishable z→z; agents' label is off-chain (`agentId` only in registry/objects). |
-| Curious registry | sees public claims only; by design cannot compute balances. |
-| Malicious attestor | every claim is re-verified from chain + wallet scan (P5); memo digest prevents object editing. |
-| Compromised verifier | leaking a scoped uivk exposes attestation history **of the dedicated account only** (documented, bounded). |
-| Over-sharing operator | MCP refuses any tool that exports material outside+zsol-attn scope (FR-3.4). |
-
-**Not claimed:** atomic escrow, inheritance semantics, multi-asset attestation, mainnet promotion.
-**Fungibility caveat (documented):** claims are per-account and per-pool; cross-pool sum
-inference (Sapling vs the new Ironwood-era pool) is out of scope for v0.1 and listed as
-[future work in `TODOS.md`] with honest disclosure in the SRS.
-
-## 11. References
-
-ZIP-32 (account derivation), ZIP-316 (UA/uivk), ZIP-302/623 (memos) · Zallet RPC (zcashd-shaped;
-**boot-step-0 parity pin required** — [`OPERATIONS.md`](OPERATIONS.md)) · Z3 (Zebra/Zaino/Zallet) ·
-BaFin notices (Aug 19 2026; proof-of-ownership > €1,000), FinCEN withdrawal (Oct 5 2026, US).
+ZIP-32 (accounts), ZIP-302 (memos), ZIP-316 (UFVK), ZIP-317 (fees), ZIP-218 (NU7 block spacing),
+RFC 8032 (Ed25519), RFC 7693 (BLAKE2), lightwalletd `CompactTxStreamer` protocol, Bitrefill API
+v2 and eCommerce MCP (`https://api.bitrefill.com/mcp`). Context: the Orchard counterfeiting bug
+disclosed in June 2026 was found with AI-assisted auditing, which motivated the Ironwood pool
+(NU6.3).
