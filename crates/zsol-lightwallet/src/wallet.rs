@@ -252,9 +252,20 @@ impl Wallet {
             return Ok(id);
         }
         let bday = birthday_at(client, birthday).await?;
+        self.import_ufvk_at(name, &ufvk, &bday)
+    }
+
+    /// The offline half of [`Self::import_view_only`]: stores `ufvk` as a ViewOnly account at an
+    /// already-resolved birthday. Never derives or stores spending material.
+    fn import_ufvk_at(
+        &mut self,
+        name: &str,
+        ufvk: &UnifiedFullViewingKey,
+        bday: &AccountBirthday,
+    ) -> anyhow::Result<AccountUuid> {
         let acct = self
             .db
-            .import_account_ufvk(name, &ufvk, &bday, AccountPurpose::ViewOnly, None)
+            .import_account_ufvk(name, ufvk, bday, AccountPurpose::ViewOnly, None)
             .map_err(|e| anyhow!("import_account_ufvk: {e}"))?;
         let id = acct.id();
         self.meta.accounts.insert(name.into(), id.expose_uuid());
@@ -476,5 +487,147 @@ impl Wallet {
             db_path(&self.dir),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zcash_client_backend::data_api::chain::ChainState;
+    use zcash_primitives::block::BlockHash;
+    use zcash_protocol::consensus::{NetworkUpgrade, Parameters as _};
+
+    const NET: Network = Network::TestNetwork;
+
+    /// Owner-only scratch directory under the OS temp dir, removed on drop.
+    struct TmpDir(PathBuf);
+    impl TmpDir {
+        fn new(tag: &str) -> Self {
+            let p = std::env::temp_dir().join(format!(
+                "zsol-lightwallet-test-{}-{tag}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&p);
+            Self(p)
+        }
+    }
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Offline birthday: empty chain state just before Sapling activation (no lightwalletd).
+    fn offline_birthday() -> AccountBirthday {
+        let h = NET.activation_height(NetworkUpgrade::Sapling).unwrap() - 1;
+        AccountBirthday::from_parts(ChainState::empty(h, BlockHash([0; 32])), None)
+    }
+
+    /// A spending wallet built offline: same account derivation as `create_spending`, but with
+    /// a fresh random in-memory seed and no tree-state fetch (no seed.age is written).
+    fn offline_spending_wallet(dir: &Path, names: &[&str]) -> Wallet {
+        create_private_dir(dir).unwrap();
+        let mut seed_bytes = vec![0u8; 32];
+        getrandom::fill(&mut seed_bytes).unwrap();
+        let seed = SecretVec::new(seed_bytes);
+        let mut db = open_db(dir, NET).unwrap();
+        let bday = offline_birthday();
+        let mut accounts = BTreeMap::new();
+        for name in names {
+            let (id, _usk) = db.create_account(name, &seed, &bday, None).unwrap();
+            accounts.insert(name.to_string(), id.expose_uuid());
+        }
+        let w = Wallet {
+            dir: dir.to_path_buf(),
+            params: NET,
+            meta: Meta {
+                network: chain::network_name(&NET).into(),
+                kind: WalletKind::Spending,
+                birthday: u32::from(bday.height()),
+                accounts,
+            },
+            db,
+        };
+        w.save_meta().unwrap();
+        w
+    }
+
+    /// FR-2.5: only `zsol-attn` and `zsol-attn-*` are shareable.
+    #[test]
+    fn shareable_account_rule() {
+        for ok in ["zsol-attn", "zsol-attn-2", "zsol-attn-bob"] {
+            assert!(is_shareable_account(ok), "{ok}");
+        }
+        for no in [
+            "commerce",
+            "treasury",
+            "",
+            "zsol-attn2",
+            "zsol-att",
+            "ZSOL-ATTN",
+            " zsol-attn",
+            "peer-zsol-attn",
+        ] {
+            assert!(!is_shareable_account(no), "{no:?}");
+        }
+    }
+
+    /// FR-2.5 AC (negative test): exporting the `commerce` UFVK is refused even though the
+    /// account exists and has a UFVK; `zsol-attn` exports fine from the same wallet.
+    #[test]
+    fn export_ufvk_refuses_commerce() {
+        let tmp = TmpDir::new("export");
+        let w = offline_spending_wallet(&tmp.0, &["zsol-attn", "commerce"]);
+        for name in ["commerce", "treasury", ""] {
+            let err = w.export_ufvk(name).unwrap_err().to_string();
+            assert!(err.contains("refusing"), "{name:?}: {err}");
+        }
+        let ufvk = w.export_ufvk("zsol-attn").unwrap();
+        assert!(UnifiedFullViewingKey::decode(&NET, &ufvk).is_ok());
+        // the commerce account really exists — the refusal is policy, not a lookup miss
+        assert!(w.account("commerce").is_ok());
+    }
+
+    /// FR-3.1 AC: a verifier wallet in its own data directory imports the attestor's UFVK as
+    /// view-only and holds no attestor key material (no seed, no identity, no spending account).
+    #[test]
+    fn verifier_wallet_holds_no_key_material() {
+        let att_tmp = TmpDir::new("attestor");
+        let ver_tmp = TmpDir::new("verifier");
+        let attestor = offline_spending_wallet(&att_tmp.0, &["zsol-attn", "commerce"]);
+        let ufvk_s = attestor.export_ufvk("zsol-attn").unwrap();
+        let ufvk = UnifiedFullViewingKey::decode(&NET, &ufvk_s).unwrap();
+
+        let mut v = Wallet::create_view_only(&ver_tmp.0, NET, attestor.meta.birthday).unwrap();
+        let id = v
+            .import_ufvk_at("peer-agent", &ufvk, &offline_birthday())
+            .unwrap();
+
+        // separate directory, view-only kind, persisted as such
+        assert_ne!(att_tmp.0, ver_tmp.0);
+        assert_eq!(v.meta.kind, WalletKind::ViewOnly);
+        assert_eq!(
+            Wallet::open(&ver_tmp.0).unwrap().meta.kind,
+            WalletKind::ViewOnly
+        );
+
+        // no seed / identity files in the verifier's directory
+        assert!(!ver_tmp.0.join("seed.age").exists());
+        assert!(!ver_tmp.0.join("identity.txt").exists());
+
+        // every account in the verifier DB is ViewOnly; the imported one round-trips the UFVK
+        let ids = v.db.get_account_ids().unwrap();
+        assert_eq!(ids, vec![id]);
+        for aid in ids {
+            let acct = v.db.get_account(aid).unwrap().unwrap();
+            assert_eq!(acct.purpose(), AccountPurpose::ViewOnly);
+        }
+        let acct = v.db.get_account(id).unwrap().unwrap();
+        assert_eq!(acct.ufvk().unwrap().encode(&NET).unwrap(), ufvk_s);
+
+        // the wallet refuses to produce spending material at all
+        assert!(v.seed().is_err());
+        // and the import never added the attestor's commerce account
+        assert!(v.account("commerce").is_err());
     }
 }
