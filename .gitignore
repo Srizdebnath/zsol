@@ -1,0 +1,16 @@
+/target
+node_modules/
+.next/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+.env.zallet-pins
+coverage/
+z3/**          # Z3 clone lives OUTSIDE this repo (see docs/OPERATIONS.md)
+z3-data/**
+docs/evidence/*.png
+docs/evidence/*.mp4
+.DS_Store
+Thumbs.db
