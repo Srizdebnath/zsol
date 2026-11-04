@@ -1,0 +1,12 @@
+{
+  "version": "1",
+  "underwriterId": "zsol-credit-desk-1",
+  "mode": "test",
+  "ltvBps": 5000,
+  "maxLoanUsd": 50,
+  "maxTenorBlocks": 3456,
+  "minConf": 1,
+  "rateMaxAgeSecs": 600,
+  "allowedProducts": ["test-gift-card-code", "test-gift-card-link", "test-phone-refill"],
+  "note": "SPEC §11. limit = anchored × ltvBps/10000 − outstanding. mode=test buys only Bitrefill's free official test products. maxTenorBlocks 3456 ≈ 24 h at NU7's 25 s spacing."
+}

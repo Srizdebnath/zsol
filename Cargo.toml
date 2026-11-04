@@ -1,9 +1,13 @@
 [workspace]
 resolver = "2"
-# v0 members: types + wallet. registry (T-25) and mcp (T-32) join at their milestones.
+# crates/zsol-wallet (Zallet JSON-RPC backend, protocol 0.1) is parked until a Zallet release
+# supports NU7 on testnet (zcash/wallet PR #898); see docs/FINDINGS.md F-8.
 members = [
   "crates/zsol-types",
-  "crates/zsol-wallet",
+  "crates/zsol-lightwallet",
+  "crates/zsol-verifier",
+  "crates/zsol-cli",
+  "crates/zsol-credit",
   "crates/zsol-registry",
   "crates/zsol-mcp",
 ]
@@ -17,6 +21,8 @@ repository = "https://github.com/Srizdebnath/zsol"
 [workspace.dependencies]
 zsol-types = { path = "crates/zsol-types" }
 zsol-wallet = { path = "crates/zsol-wallet" }
+zsol-lightwallet = { path = "crates/zsol-lightwallet" }
+zsol-verifier = { path = "crates/zsol-verifier" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -30,9 +36,26 @@ blake2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
 hex = "0.4"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 tower-http = { version = "0.6", features = ["trace", "limit"] }
 async-trait = "0.1"
 
 [profile.release]
 lto = "thin"
+
+# librustzcash `main` is ahead of the newest published pre-releases (NU7 testnet height,
+# Ironwood). Same pinned revision as zcash/zcash-devtool so we build what upstream tested.
+[patch.crates-io]
+equihash = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+pczt = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_address = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_client_backend = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_client_sqlite = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_encoding = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_keys = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_pool_migration = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_primitives = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_proofs = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_protocol = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_transparent = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zip321 = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
