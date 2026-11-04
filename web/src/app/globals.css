@@ -65,3 +65,36 @@ textarea { font-family: var(--font-mono); font-size: 0.85rem; border: var(--bord
 .kv dd { margin: 0; word-break: break-all; }
 
 .footnote { margin-top: 28px; font-size: 0.7rem; border-top: 2px solid var(--ink); padding-top: 8px; }
+
+/* copyable ids (txids, invoice ids): monospace + hard copy button */
+.copyable { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.copyable code { word-break: break-all; }
+.copy-btn { font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700; border: 2px solid var(--ink); background: var(--yellow); box-shadow: 2px 2px 0 0 var(--ink); padding: 1px 6px; cursor: pointer; }
+.copy-btn:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 0 var(--ink); }
+
+/* loan status colours (FR-7.4): open / at-risk red / repaid / defaulted */
+.loan-status { border: var(--border-w) solid var(--ink); padding: 2px 8px; font-weight: 700; display: inline-block; white-space: nowrap; }
+.loan-open { background: var(--blue); }
+.loan-at-risk { background: var(--red); }
+.loan-repaid { background: var(--green); }
+.loan-defaulted { background: var(--ink); color: var(--paper); }
+tr.row-at-risk td { background: #ffe3e3; }
+tr.row-defaulted td { background: #e9e9e9; }
+
+.badge { border: 2px solid var(--ink); padding: 0 6px; font-weight: 700; display: inline-block; font-size: 0.8rem; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+.qr { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+.qr-box { width: 200px; height: 200px; border: var(--border-w) solid var(--ink); box-shadow: var(--shadow-hard); background: #fff; padding: 6px; }
+.qr-box svg { width: 100%; height: 100%; display: block; }
+.event-detail { display: flex; gap: 4px 12px; flex-wrap: wrap; align-items: center; font-size: 0.8rem; }
+.table-wrap { overflow-x: auto; }
+
+@media (max-width: 640px) {
+  .kv { grid-template-columns: 1fr; }
+  .kv dt { margin-top: 6px; }
+  .grid-2 { grid-template-columns: 1fr; }
+  .nav { flex-wrap: wrap; }
+  .check-row { flex-wrap: wrap; }
+  .check-name { min-width: 0; }
+  input[type="text"] { width: 100%; }
+}
