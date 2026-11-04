@@ -156,15 +156,35 @@ impl Cfg {
         Ok(Self {
             zebra_url: env_req("ZEBRA_RPC_URL")?,
             zallet_url: env_req("ZALLET_RPC_URL")?,
-            zallet_auth: std::env::var("ZALLET_RPC_AUTH")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or_else(zallet_cookie_from_env),
-            zebra_auth: cookie_header_from_env("ZEBRA_RPC_COOKIE_FILE"),
+            zallet_auth: auth_header("ZALLET_RPC_AUTH")
+                .or_else(|| cookie_header_from_env("ZALLET_RPC_COOKIE_FILE")),
+            zebra_auth: auth_header("ZEBRA_RPC_AUTH")
+                .or_else(|| cookie_header_from_env("ZEBRA_RPC_COOKIE_FILE")),
             timeout: Duration::from_secs(env_u64("ZSOL_RPC_TIMEOUT_SECS", 5)),
             methods: Methods::from_env(),
             attest_account: env_u64("ZSOL_ATTEST_ACCOUNT", 9),
         })
+    }
+}
+
+/// Auth header from `user:password` OR a prebuilt `Basic <b64>` value (the raw
+/// header form operators may prefer). Values live in memory only (FR-2.2).
+fn auth_header(env_key: &str) -> Option<String> {
+    let raw = std::env::var(env_key)
+        .ok()
+        .filter(|s| !s.trim().is_empty())?
+        .trim()
+        .to_string();
+    if raw.starts_with("Basic ") {
+        Some(raw)
+    } else if let Some((user, pass)) = raw.split_once(':') {
+        use base64::Engine as _;
+        Some(format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"))
+        ))
+    } else {
+        None
     }
 }
 
@@ -185,9 +205,12 @@ fn cookie_header_from_env(key: &str) -> Option<String> {
     ))
 }
 
+#[allow(dead_code)]
 fn zallet_cookie_from_env() -> Option<String> {
     cookie_header_from_env("ZALLET_RPC_COOKIE_FILE")
 }
+
+// (kept symmetric with zebra side; may be unused when auth comes from env)
 
 #[derive(Deserialize)]
 struct RpcResp {
@@ -367,22 +390,32 @@ impl Client {
     /// Outgoing self-spend anchor composer per SPEC §5 (FR-2.4). Builds the exact
     /// z_sendmany params; NOTHING is broadcast unless the caller passes `dry_run=false`
     /// and the wallet RPC accepts. Memo binary must already be the encoded anchor bytes.
+    /// `from` is an ADDRESS (unified-addr form: zcashd account aliases are not
+    /// accepted by Zallet beta.1; unified UA addresses select account spend authority).
     pub fn build_self_spend_params(
-        from_account: u64,
+        from_address: &str,
         to_ua: &str,
         amount_zat: u64,
         memo_bytes: &[u8],
         min_confirms: u32,
     ) -> Value {
-        let memo_b64 = base64::engine::general_purpose::STANDARD.encode(memo_bytes);
+        // Zallet beta.1 requires memo as HEX bytes (base64 rejected with -8).
+        let memo_hex = hex::encode(memo_bytes);
+        // z_sendmany amounts are ZEC; zsol's protocol amounts are zatoshi (u64).
+        // Convert here so a 1,000,000-zat claim anchors as 0.01 ZEC — NOT 1e6 ZEC.
+        let amount_zec = (amount_zat as f64) / 100_000_000.0;
+        // Zallet beta.1: "always calculates fees internally; the fee field must be null" —
+        // passing a numeric fee is a hard (-8) reject. (The 10,000-zat figure stays
+        // in the dry-run prepare plan; the real send defers fee calc to the wallet.)
         json!([
-            from_account.to_string(), // from: account alias "9"
+            from_address, // from: unified address of the attest account
             [json!({
                 "address": to_ua,
-                "amount": amount_zat as f64,   // zcashd-shaped: numeric zat? pinned at boot; kept explicit
-                "memo": memo_b64
+                "amount": amount_zec,
+                "memo": memo_hex
             })],
-            min_confirms
+            min_confirms,
+            Value::Null,
         ])
     }
 
@@ -397,17 +430,18 @@ impl Client {
     }
 
     /// Targeted op status (FR-2.5 lifecycle: submit → poll → result).
+    /// Zallet z_getoperationstatus takes a SEQUENCE of opid sequences: [["op…"]].
     pub async fn op_status_for(&self, opid: &str) -> Result<Value, WalletError> {
         self.call(
             Base::Zallet,
             &self.cfg.methods.op_status,
-            json!([opid.to_string()]),
+            json!([[opid.to_string()]]),
         )
         .await
     }
 
     pub async fn op_result(&self, opid: &str) -> Result<Value, WalletError> {
-        self.call(Base::Zallet, &self.cfg.methods.op_result, json!([opid]))
+        self.call(Base::Zallet, &self.cfg.methods.op_result, json!([[opid]]))
             .await
     }
 
@@ -441,16 +475,24 @@ mod tests {
             digest: [3u8; 32],
         }
         .encode();
-        let params = Client::build_self_spend_params(9, "u1x", 1_000_000, &memo, 1);
+        let params = Client::build_self_spend_params("u1from", "u1to", 1_000_000, &memo, 1);
         let arr = params.as_array().unwrap();
-        assert_eq!(arr.len(), 3);
-        assert_eq!(arr[0], json!("9"));
+        assert_eq!(arr.len(), 4);
+        assert_eq!(arr[0], json!("u1from"));
         let outs = arr[1].as_array().unwrap();
         assert_eq!(outs.len(), 1);
-        assert_eq!(outs[0]["address"], json!("u1x"));
-        assert_eq!(outs[0]["amount"], json!(1_000_000f64));
-        assert!(outs[0]["memo"].is_string());
+        assert_eq!(outs[0]["address"], json!("u1to"));
+        // amount is ZEC: 1,000,000 zat = 0.01 ZEC — the unit bug dry-run cannot catch
+        assert_eq!(outs[0]["amount"], json!(0.01f64));
+        // memo is hex-encoded bytes (zallet parity)
+        assert!(outs[0]["memo"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
         assert_eq!(arr[2], json!(1));
+        // fee: zallet calculates internally and REQUIRES null — numeric fee rejected
+        assert_eq!(arr[3], json!(Value::Null));
     }
 
     #[test]
