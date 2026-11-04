@@ -99,7 +99,7 @@ an unbroadcast PCZT proof), cross-pool aggregation, a hosted VPS.
 - **FR-6.1** Underwriter HTTP API (`/v0/credit/open`, `/challenge`, `/loans/:id`) and MCP tools
   `credit_request` and `credit_repay`. *AC:* a borrower agent completes a loan with no human
   steps beyond spend approval.
-- **FR-6.2** Policy file: `ltvBps`, `maxTenorBlocks`, `maxLoanUsd`, `mode` (`test` | `live`),
+- **FR-6.2** Policy file: `ltvBps`, `maxTenorBlocks`, `maxLoanUsd`, `maxDailyUsd` (rolling 24 h, desk-wide), `mode` (`test` | `live`),
   `rateMaxAgeSecs`. Reference rate: CoinGecko ZEC/USD, falling back to Kraken; the source and
   timestamp are stored on every loan (`rateSource`, `rateAt`). *AC:* the policy is loaded and
   echoed in `/v0/health`.

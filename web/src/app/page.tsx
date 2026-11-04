@@ -227,6 +227,8 @@ export default async function StatusPage() {
               <dd>{(desk.health.policy.ltvBps / 100).toFixed(2)}% of min(claim, anchored)</dd>
               <dt>max loan</dt>
               <dd>${desk.health.policy.maxLoanUsd}</dd>
+              <dt>max per day (desk-wide)</dt>
+              <dd>${desk.health.policy.maxDailyUsd}</dd>
               <dt>max tenor</dt>
               <dd>{desk.health.policy.maxTenorBlocks} blocks</dd>
               <dt>min confirmations</dt>

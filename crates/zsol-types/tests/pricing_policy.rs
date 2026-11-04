@@ -15,6 +15,8 @@ fn credit_policy_within_bounds() {
     let ltv = p["ltvBps"].as_u64().unwrap();
     assert!(ltv > 0 && ltv <= 10_000, "ltvBps must be in (0, 10000]");
     assert!(p["maxLoanUsd"].as_f64().unwrap() > 0.0);
+    let daily = p["maxDailyUsd"].as_f64().unwrap();
+    assert!(daily >= p["maxLoanUsd"].as_f64().unwrap(), "maxDailyUsd must allow one max loan");
     assert!(p["maxTenorBlocks"].as_u64().unwrap() > 0);
     assert!(p["minConf"].as_u64().unwrap() >= 1);
     assert!(!p["underwriterId"].as_str().unwrap().is_empty());

@@ -39,6 +39,7 @@ struct Policy {
     mode: String,
     ltv_bps: u64,
     max_loan_usd: f64,
+    max_daily_usd: f64,
     max_tenor_blocks: u32,
     min_conf: u32,
     rate_max_age_secs: u64,
@@ -218,6 +219,15 @@ async fn open_credit(
     }
     let mut guard = st.inner.lock().await;
     let inner = &mut *guard;
+    // Daily cap is desk-wide and checked before the challenge is consumed, like the price checks.
+    let spent_24h = db::spent_usd_since(&inner.book, now_epoch_secs().saturating_sub(86_400))?;
+    if spent_24h + req.value_usd as f64 > st.policy.max_daily_usd {
+        return Err(reject(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "daily-cap-reached",
+            json!({"maxDailyUsd": st.policy.max_daily_usd, "spentUsd24h": spent_24h}),
+        ));
+    }
     if !db::consume_challenge(&inner.book, &p.challenge.nonce, now_epoch_secs())? {
         return Err(reject(
             StatusCode::UNPROCESSABLE_ENTITY,

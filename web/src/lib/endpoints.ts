@@ -294,6 +294,7 @@ export type CreditPolicy = {
   mode: string;
   ltvBps: number;
   maxLoanUsd: number;
+  maxDailyUsd: number;
   maxTenorBlocks: number;
   minConf: number;
   rateMaxAgeSecs: number;

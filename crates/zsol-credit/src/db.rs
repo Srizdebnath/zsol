@@ -154,6 +154,16 @@ pub fn outstanding_zat(c: &Connection, agent_id: &str) -> anyhow::Result<u64> {
     Ok(v as u64)
 }
 
+/// USD value of every loan opened since `since` (epoch secs), whatever its status: the desk paid
+/// Bitrefill for each one.
+pub fn spent_usd_since(c: &Connection, since: u64) -> anyhow::Result<f64> {
+    Ok(c.query_row(
+        "SELECT IFNULL(SUM(value_usd),0) FROM loans WHERE created_at >= ?1",
+        params![since as i64],
+        |r| r.get(0),
+    )?)
+}
+
 pub fn agent_frozen(c: &Connection, agent_id: &str) -> anyhow::Result<bool> {
     let n: i64 = c.query_row(
         "SELECT COUNT(*) FROM loans WHERE agent_id = ?1 AND status IN ('at-risk','defaulted')",

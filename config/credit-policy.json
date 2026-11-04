@@ -4,9 +4,10 @@
   "mode": "test",
   "ltvBps": 5000,
   "maxLoanUsd": 50,
+  "maxDailyUsd": 50,
   "maxTenorBlocks": 3456,
   "minConf": 1,
   "rateMaxAgeSecs": 600,
   "allowedProducts": ["test-gift-card-code", "test-gift-card-link", "test-phone-refill"],
-  "note": "SPEC §11. limit = anchored × ltvBps/10000 − outstanding. mode=test buys only Bitrefill's free official test products. maxTenorBlocks 3456 ≈ 24 h at NU7's 25 s spacing."
+  "note": "SPEC §11. limit = anchored × ltvBps/10000 − outstanding. mode=test buys only Bitrefill's free official test products. maxDailyUsd caps the desk's total purchases over any rolling 24 h, all agents together. maxTenorBlocks 3456 ≈ 24 h at NU7's 25 s spacing."
 }
