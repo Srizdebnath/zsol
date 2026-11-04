@@ -1,0 +1,26 @@
+flowchart TD
+    V["Verifier"] -->|"challenge: 32-byte nonce,<br/>verifierId, expiresAt"| A["Attestor agent"]
+    A -->|"presentation: object, ufvk,<br/>challenge, signature"| IMP["Import UFVK view-only<br/>at birthday in own wallet"]
+    IMP --> SYNC["Sync to chain tip"]
+
+    SYNC --> C1["C1 protocol, network, pool<br/>claim at least 10,000 zat<br/>fail: protocol-unknown,<br/>network-mismatch, dust-claim"]
+    SYNC --> C2["C2 anchor mined<br/>at anchorHeight<br/>fail: anchor-not-mined"]
+    SYNC --> C3["C3 spend authority<br/>anchor spends a zsol-attn note<br/>fail: not-spent-by-account"]
+    SYNC --> C4["C4 binding<br/>memo 0xFF‖zs02‖D matches<br/>recomputed digest<br/>fail: memo-digest-mismatch"]
+    SYNC --> C5["C5 value<br/>anchored notes cover claim<br/>fail: claim-exceeds-outputs"]
+    SYNC --> C6["C6 liveness<br/>no anchored note spent<br/>fail: anchored-note-spent"]
+    SYNC --> C7["C7 freshness<br/>within maxAgeHours<br/>fail: stale-attestation"]
+    SYNC --> C8["C8 presentation<br/>Ed25519 sig by sessionKey<br/>over this nonce<br/>fail: presentation-invalid"]
+
+    C1 --> DEC{"All eight pass?"}
+    C2 --> DEC
+    C3 --> DEC
+    C4 --> DEC
+    C5 --> DEC
+    C6 --> DEC
+    C7 --> DEC
+    C8 --> DEC
+
+    DEC -->|"yes"| OK["Tier: verified"]
+    DEC -->|"no"| CO["Tier: claim-only<br/>with every failing code"]
+    OK --> LIVE["Watch each block: live<br/>released when notes spent<br/>expired when stale"]
