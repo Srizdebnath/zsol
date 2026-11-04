@@ -1,10 +1,9 @@
 [workspace]
 resolver = "2"
+# v0 members: types + wallet. registry (T-25) and mcp (T-32) join at their milestones.
 members = [
   "crates/zsol-types",
   "crates/zsol-wallet",
-  "crates/zsol-registry",
-  "crates/zsol-mcp",
 ]
 
 [workspace.package]

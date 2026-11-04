@@ -62,7 +62,11 @@ JSON, compact, base64url-transportable (`b64u`). Canonical form = key-sorted, no
 }
 ```
 
-**Object digest** `D = BLAKE2b-256("zsol/0.1" ‖ 0x1f ‖ canonical(object))`.
+**Object digest** `D = BLAKE2b-256("zsol/0.1" ‖ 0x1f ‖ canonical(object \ {memoBinding}))` —
+canonical form of the object with the `memoBinding` field **excluded**. The exclusion makes the
+anchor-memo fixed point computable (the memo carries D, so D cannot depend on the memo). Binding
+completeness is preserved: every field except `memoBinding` is bound through D, and `memoBinding`
+itself is verified by direct byte-equality against the on-chain scanned memo (§5/§6).
 
 **t0 claim tier:** object published to registry alone. Registry freshness/tamper-evidence only;
 **no solvency established yet** (this is what public claim means — honest by design).
