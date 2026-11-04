@@ -126,9 +126,11 @@ impl Methods {
 pub struct Cfg {
     pub zebra_url: String,
     pub zallet_url: String,
-    /// Prebuilt Authorization header value, e.g. `Basic <base64(__cookie__:...)>` taken from
-    /// the z3 cookie volume by the operator (never stored in-repo).
-    pub auth_header: Option<String>,
+    /// Prebuilt Authorization header for ZALLET (e.g. `Basic <...>` from auth config).
+    pub zallet_auth: Option<String>,
+    /// Prebuilt Authorization header for ZEBRA (cookie token from the z3 cookie
+    /// volume, mounted read-only by the operator; FR-2.2: never logged).
+    pub zebra_auth: Option<String>,
     pub timeout: Duration,
     pub methods: Methods,
     pub attest_account: u64,
@@ -154,14 +156,37 @@ impl Cfg {
         Ok(Self {
             zebra_url: env_req("ZEBRA_RPC_URL")?,
             zallet_url: env_req("ZALLET_RPC_URL")?,
-            auth_header: std::env::var("ZALLET_RPC_AUTH")
+            zallet_auth: std::env::var("ZALLET_RPC_AUTH")
                 .ok()
-                .filter(|s| !s.trim().is_empty()),
+                .filter(|s| !s.trim().is_empty())
+                .or_else(zallet_cookie_from_env),
+            zebra_auth: cookie_header_from_env("ZEBRA_RPC_COOKIE_FILE"),
             timeout: Duration::from_secs(env_u64("ZSOL_RPC_TIMEOUT_SECS", 5)),
             methods: Methods::from_env(),
             attest_account: env_u64("ZSOL_ATTEST_ACCOUNT", 9),
         })
     }
+}
+
+/// Cookie-file → http-basic header builder. z3's cookie volume is mounted
+/// read-only by the operator (T-31/T-03); the token stays in memory, is never
+/// logged (FR-2.2), and only exists when the operator mounts it.
+fn cookie_header_from_env(key: &str) -> Option<String> {
+    let path = std::env::var(key).ok().filter(|s| !s.trim().is_empty())?;
+    let token = std::fs::read_to_string(&path).ok()?;
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    use base64::Engine as _;
+    Some(format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("cookie:{token}"))
+    ))
+}
+
+fn zallet_cookie_from_env() -> Option<String> {
+    cookie_header_from_env("ZALLET_RPC_COOKIE_FILE")
 }
 
 #[derive(Deserialize)]
@@ -202,8 +227,17 @@ impl Client {
         };
         let body = json!({"jsonrpc": "1.0", "id": "zsol", "method": method, "params": params});
         let mut req = self.http.post(url).json(&body);
-        if let Some(a) = &self.cfg.auth_header {
-            req = req.header(reqwest::header::AUTHORIZATION, a.clone());
+        match base {
+            Base::Zebra => {
+                if let Some(a) = &self.cfg.zebra_auth {
+                    req = req.header(reqwest::header::AUTHORIZATION, a.clone());
+                }
+            }
+            Base::Zallet => {
+                if let Some(a) = &self.cfg.zallet_auth {
+                    req = req.header(reqwest::header::AUTHORIZATION, a.clone());
+                }
+            }
         }
         let resp = req.send().await.map_err(|e| {
             if e.is_timeout() {

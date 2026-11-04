@@ -1,0 +1,71 @@
+# zsol services attached to the z3 zcash stack (T-31, FR-7.1).
+#
+#   cp .env.zsol.example .env.zsol   (fill values)
+#   docker compose --env-file .env.zsol -f docker/compose.zsol.yml up -d
+#
+# zsol attaches to the EXISTING z3 network (explicit names from z3's contract):
+#   network: z3-testnet (mainnet: z3-mainnet, regtest: z3-regtest)
+#   volumes: z3-testnet-cookie holds the zebra RPC cookie — mounted READ-ONLY
+#   here (OPS §1/T-03); neither service ever holds spend keys (P2).
+#
+# The two Zallets belong to the z3 stack (T-41 topology): attestor + verifier
+# wallet RPCs are reachable inside that network as the z3 service names.
+name: zsol
+
+services:
+  zsol-registry:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.zsol
+    image: ${ZSOL_IMAGE:-zsol:local}
+    restart: unless-stopped
+    command: ["/usr/local/bin/zsol-registry"]
+    environment:
+      ZSOL_REGISTRY_DB: /data/zsol-registry.db
+      ZSOL_REGISTRY_BIND: 0.0.0.0:8088
+      # FR-3.4 (public only WITH rate limit + size caps — SRS open-question 1)
+      ZSOL_REGISTRY_RATE_PER_SEC: "5"
+      ZSOL_REGISTRY_RATE_BURST: "10"
+      ZSOL_REGISTRY_MAX_BODY: "64000"
+    volumes:
+      - registry-data:/data
+    ports:
+      # LAN-safe default: loopback only — raise exposure consciously (SPEC §7).
+      - "${ZSOL_REGISTRY_HOST_PORT:-127.0.0.1:8088}:8088"
+    networks: [z3]
+
+  zsol-mcp:
+    image: ${ZSOL_IMAGE:-zsol:local}
+    restart: unless-stopped
+    command: ["/usr/local/bin/zsol-mcp"]
+    depends_on: [zsol-registry]
+    environment:
+      ZEBRA_RPC_URL: http://zebra:${Z3_ZEBRA_RPC_PORT:-18232}
+      ZEBRA_RPC_COOKIE_FILE: /var/run/auth/.cookie
+      ZALLET_RPC_URL: ${ZALLET_RPC_URL:?set to attestor Zallet URL, e.g. http://zallet-attestor:14232}
+      ZALLET_RPC_AUTH: ${ZALLET_RPC_AUTH:-}
+      ZSOL_ATTEST_ACCOUNT: ${ZSOL_ATTEST_ACCOUNT:-9}
+      ZSOL_REGISTRY_URL: http://zsol-registry:8088
+      ZSOL_MCP_HTTP_BIND: 0.0.0.0:8099
+      ZSOL_MCP_NO_STDIO: "1"
+      # FR-4.5: dry-run default; explicit opt-out ONLY by conscious operator.
+      ZSOL_MCP_DRY_RUN: ${ZSOL_MCP_DRY_RUN:-1}
+      ZSOL_SHARE_ACCOUNTS: ${ZSOL_SHARE_ACCOUNTS:-91,92}
+    volumes:
+      # read-only cookie volume from the z3 stack — zsol holds NO keys (P2)
+      - z3-cookie:/var/run/auth:ro
+    ports:
+      - "${ZSOL_MCP_HOST_PORT:-127.0.0.1:8099}:8099"
+    networks: [z3]
+
+volumes:
+  registry-data:
+    name: zsol-registry-data
+  z3-cookie:
+    external: true
+    name: ${Z3_COOKIE_VOLUME:-z3-testnet-cookie}
+
+networks:
+  z3:
+    external: true
+    name: ${Z3_NETWORK:-z3-testnet}
