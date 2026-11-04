@@ -166,8 +166,8 @@ impl AttestationObject {
             return Err(ZsolError::Claim(ReasonCode::ProtocolUnknown));
         }
         validate_claim_zat(self.claim_zat).map_err(ZsolError::Claim)?;
-        let hex_ok = self.anchor_txid.len() == 64
-            && self.anchor_txid.bytes().all(|c| c.is_ascii_hexdigit());
+        let hex_ok =
+            self.anchor_txid.len() == 64 && self.anchor_txid.bytes().all(|c| c.is_ascii_hexdigit());
         if !hex_ok {
             return Err(ZsolError::Claim(ReasonCode::AnchorNotMined));
         }
@@ -253,7 +253,11 @@ impl AnchorMemo {
     }
 
     /// Memo ↔ object binding (SPEC §5): tag/ver assumed by decode; height + digest must match.
-    pub fn verify_binding(&self, expected_height: u64, object_digest: &[u8; 32]) -> Result<(), ZsolError> {
+    pub fn verify_binding(
+        &self,
+        expected_height: u64,
+        object_digest: &[u8; 32],
+    ) -> Result<(), ZsolError> {
         if self.height != expected_height || self.digest != *object_digest {
             Err(ZsolError::DigestMismatch)
         } else {
@@ -293,7 +297,8 @@ fn sort_json(v: &mut serde_json::Value) {
 
 /// Independent reference golden (computed with python3 hashlib.blake2b digest_size=32):
 /// BLAKE2b-256(b"zsol/0.1\x1fgolden\x1fvector")
-pub const GOLDEN_DIGEST_HEX: &str = "c3fa8cc5f9621c95bec0a532fa298f8bd7ef42596cba589d69c5644ca6b3fce7";
+pub const GOLDEN_DIGEST_HEX: &str =
+    "c3fa8cc5f9621c95bec0a532fa298f8bd7ef42596cba589d69c5644ca6b3fce7";
 
 #[cfg(test)]
 mod tests {
@@ -321,7 +326,7 @@ mod tests {
             height: o.anchor_height,
             digest,
         };
-        o.memo_binding = B64U.encode(&memo.encode());
+        o.memo_binding = B64U.encode(memo.encode());
         o
     }
 
@@ -387,7 +392,10 @@ mod tests {
     /// T-11/T-16: memo codec — encode/decode roundtrip incl. padded memo tolerance.
     #[test]
     fn ac_memo_roundtrip_and_padding_tolerance() {
-        let memo = AnchorMemo { height: 77, digest: [9u8; 32] };
+        let memo = AnchorMemo {
+            height: 77,
+            digest: [9u8; 32],
+        };
         let bytes = memo.encode();
         assert_eq!(AnchorMemo::decode_prefix(&bytes).unwrap(), memo);
         // wallet right-padding (SPEC §5): trailing 100 bytes ignored by prefix parse
@@ -400,9 +408,10 @@ mod tests {
     #[test]
     fn ac_memo_malformed_and_binding() {
         assert!(AnchorMemo::decode_prefix(&[0u8; 10]).is_err());
-        let mut ok = sample();
+        let ok = sample();
         let memo = AnchorMemo::decode_prefix(&B64U.decode(&ok.memo_binding).unwrap()).unwrap();
-        memo.verify_binding(ok.anchor_height, &ok.digest().unwrap()).unwrap();
+        memo.verify_binding(ok.anchor_height, &ok.digest().unwrap())
+            .unwrap();
         // tamper the memo digest inside the object ⇒ binding fails (FR-1.3 ac-3 shape)
         let mut bad = [9u8; 32];
         bad[0] ^= 1;
@@ -450,27 +459,36 @@ mod tests {
         let mut o = sample();
         o.validate().unwrap();
         o.protocol = "other/1".into();
-        assert_eq!(o.validate(), Err(ZsolError::Claim(ReasonCode::ProtocolUnknown)));
+        assert_eq!(
+            o.validate(),
+            Err(ZsolError::Claim(ReasonCode::ProtocolUnknown))
+        );
         let mut o = sample();
         o.anchor_txid = "zz".into();
-        assert_eq!(o.validate(), Err(ZsolError::Claim(ReasonCode::AnchorNotMined)));
+        assert_eq!(
+            o.validate(),
+            Err(ZsolError::Claim(ReasonCode::AnchorNotMined))
+        );
         let mut o = sample();
         o.max_age_hours = 0;
-        assert_eq!(o.validate(), Err(ZsolError::Claim(ReasonCode::StaleAttestation)));
+        assert_eq!(
+            o.validate(),
+            Err(ZsolError::Claim(ReasonCode::StaleAttestation))
+        );
     }
 
-    /// T-11 fuzz: ≥ 1k random (height, digest) roundtrips through encode/decode.
+    // T-11 fuzz: ≥ 1k random (height, digest) roundtrips through encode/decode.
     proptest! {
-    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(1_000))]
-    #[test]
-    fn prop_memo_roundtrip(height in any::<u64>(), dg in proptest::collection::vec(any::<u8>(), 32)) {
-        let mut digest = [0u8; 32];
-        digest.copy_from_slice(&dg);
-        let memo = AnchorMemo { height, digest };
-        let dec = AnchorMemo::decode_prefix(&memo.encode()).unwrap();
-        prop_assert_eq!(dec, memo);
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(1_000))]
+        #[test]
+        fn prop_memo_roundtrip(height in any::<u64>(), dg in proptest::collection::vec(any::<u8>(), 32)) {
+            let mut digest = [0u8; 32];
+            digest.copy_from_slice(&dg);
+            let memo = AnchorMemo { height, digest };
+            let dec = AnchorMemo::decode_prefix(&memo.encode()).unwrap();
+            prop_assert_eq!(dec, memo);
+        }
     }
-}
 
     /// Keep hex import honest even if tests above change shape.
     #[test]

@@ -10,9 +10,7 @@ pub const SERVER_NAME: &str = "zsol-mcp";
 pub const SERVER_VERSION: &str = "0.1.0";
 
 fn tool_defs() -> Vec<Value> {
-    let schema = |props: Value, req: Value| {
-        json!({"type": "object", "properties": props, "required": req, "additionalProperties": false})
-    };
+    let schema = |props: Value, req: Value| json!({"type": "object", "properties": props, "required": req, "additionalProperties": false});
     let int = json!({"type": "integer", "minimum": zsol_types::DUST_FLOOR_ZAT});
     vec![
         json!({"name": "zsol_health", "description": "Stack status: zebra ready / zallet verbs pinned / registry reachable / height. SPEC §8.", "inputSchema": schema(json!({}), json!([]))}),
@@ -38,7 +36,10 @@ async fn call_tool(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Value, Too
         "zsol_import_scope" => ops::import_scope(ctx, args).await,
         "zsol_verify" => ops::verify(ctx, args).await,
         "zsol_registry_fetch" => ops::registry_fetch(ctx, args).await,
-        other => Err(ToolError::slug("unknown-tool", format!("tool not found: {other}"))),
+        other => Err(ToolError::slug(
+            "unknown-tool",
+            format!("tool not found: {other}"),
+        )),
     }
 }
 
@@ -86,11 +87,19 @@ async fn dispatch_call(ctx: &ToolCtx, c: &Call) -> Value {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             if name.is_empty() {
-                return error(id, crate::proto::INVALID_REQUEST, "tools/call requires name");
+                return error(
+                    id,
+                    crate::proto::INVALID_REQUEST,
+                    "tools/call requires name",
+                );
             }
             result(id, wrap(name, call_tool(ctx, name, &args).await))
         }
-        m => error(id, crate::proto::METHOD_NOT_FOUND, &format!("method not found: {m}")),
+        m => error(
+            id,
+            crate::proto::METHOD_NOT_FOUND,
+            &format!("method not found: {m}"),
+        ),
     }
 }
 

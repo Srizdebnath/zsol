@@ -67,7 +67,8 @@ mod tests {
     fn call_vs_notification() {
         let call = parse_one(&json!({"jsonrpc":"2.0","id":1,"method":"ping","params":{}})).unwrap();
         assert!(matches!(call, Incoming::Call(Call(_, _, _))));
-        let note = parse_one(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).unwrap();
+        let note =
+            parse_one(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).unwrap();
         assert!(matches!(note, Incoming::Notification(_, _)));
         assert!(parse_one(&json!({"method":3})).is_err());
     }

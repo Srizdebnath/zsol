@@ -94,10 +94,18 @@ pub struct ToolError {
 
 impl ToolError {
     pub fn reason(rc: ReasonCode, detail: impl Into<String>) -> Self {
-        Self { reason: Some(rc), slug: None, detail: detail.into() }
+        Self {
+            reason: Some(rc),
+            slug: None,
+            detail: detail.into(),
+        }
     }
     pub fn slug(s: &'static str, detail: impl Into<String>) -> Self {
-        Self { reason: None, slug: Some(s), detail: detail.into() }
+        Self {
+            reason: None,
+            slug: Some(s),
+            detail: detail.into(),
+        }
     }
     pub fn wire_reason(&self) -> Value {
         if let Some(rc) = self.reason {
@@ -297,9 +305,10 @@ fn map_wallet_err(e: &WalletError, verb: &'static str) -> ToolError {
         WalletError::Transport(_) => {
             ToolError::slug("wallet-unreachable", format!("{verb}: transport"))
         }
-        WalletError::EnvMissing(k) => {
-            ToolError::slug("wallet-config", format!("missing env {k}; see .env.example"))
-        }
+        WalletError::EnvMissing(k) => ToolError::slug(
+            "wallet-config",
+            format!("missing env {k}; see .env.example"),
+        ),
     }
 }
 
@@ -365,8 +374,10 @@ async fn attest_ua(ctx: &ToolCtx) -> Result<String, ToolError> {
         .addr_for_account(ctx.cfg.attest_account, &["orchard", "sapling"])
         .await
         .map_err(|e| map_wallet_err(&e, "z_getaddressforaccount"))?;
-    deep_find_ua(&v, 5)
-        .ok_or(ToolError::slug("wallet-shape", "no unified address in derivation reply"))
+    deep_find_ua(&v, 5).ok_or(ToolError::slug(
+        "wallet-shape",
+        "no unified address in derivation reply",
+    ))
 }
 
 fn frame_pre(
@@ -399,8 +410,10 @@ async fn balance_of(ctx: &ToolCtx, account: u64) -> Result<(Option<u64>, &'stati
 }
 
 pub async fn prepare_anchor(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
-    let claim = unwrap_u64(args.get("claimZat").unwrap_or(&Value::Null))
-        .ok_or(ToolError::slug("invalid-args", "claimZat (zatoshi u64) required"))?;
+    let claim = unwrap_u64(args.get("claimZat").unwrap_or(&Value::Null)).ok_or(ToolError::slug(
+        "invalid-args",
+        "claimZat (zatoshi u64) required",
+    ))?;
     zsol_types::validate_claim_zat(claim).map_err(|rc| ToolError::reason(rc, "dust floor"))?;
 
     let ua = attest_ua(ctx).await?;
@@ -450,7 +463,10 @@ async fn submit_attempt(
     let d = frame
         .digest()
         .map_err(|e| ToolError::slug("internal", e.to_string()))?;
-    let memo = AnchorMemo { height: memo_height, digest: d };
+    let memo = AnchorMemo {
+        height: memo_height,
+        digest: d,
+    };
     let rec = AnchorRecord {
         agent_id: agent_id.to_string(),
         claim_zat: claim,
@@ -465,7 +481,10 @@ async fn submit_attempt(
         height_source: "pending",
         attempts: 0,
     };
-    let send_v = ctx.w.send(rec.self_spend_params()).await
+    let send_v = ctx
+        .w
+        .send(rec.self_spend_params())
+        .await
         .map_err(|e| map_wallet_err(&e, "z_sendmany"))?;
     if let Some(t) = deep_find_txid(&send_v) {
         return Ok((memo, t, rec));
@@ -494,7 +513,8 @@ async fn wait_send_op(ctx: &ToolCtx, opid: &str) -> Result<String, ToolError> {
         let v = ctx.w.op_status_for(opid).await;
         match v {
             Ok(v) => {
-                let status = deep_find(&v, "status", 3).and_then(|s| s.as_str().map(|x| x.to_string()));
+                let status =
+                    deep_find(&v, "status", 3).and_then(|s| s.as_str().map(|x| x.to_string()));
                 match status.as_deref() {
                     Some("success") => {
                         let r = ctx
@@ -521,10 +541,7 @@ async fn wait_send_op(ctx: &ToolCtx, opid: &str) -> Result<String, ToolError> {
     }
 }
 
-fn finalize_anchor(
-    ctx: &ToolCtx,
-    rec: AnchorRecord,
-) -> Result<Value, ToolError> {
+fn finalize_anchor(ctx: &ToolCtx, rec: AnchorRecord) -> Result<Value, ToolError> {
     let memo_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&rec.memo_bytes);
     let memo = AnchorMemo::decode_prefix(&rec.memo_bytes)
         .map_err(|e| ToolError::slug("internal", e.to_string()))?;
@@ -546,8 +563,10 @@ fn finalize_anchor(
 }
 
 pub async fn anchor(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
-    let claim = unwrap_u64(args.get("claimZat").unwrap_or(&Value::Null))
-        .ok_or(ToolError::slug("invalid-args", "claimZat (zatoshi u64) required"))?;
+    let claim = unwrap_u64(args.get("claimZat").unwrap_or(&Value::Null)).ok_or(ToolError::slug(
+        "invalid-args",
+        "claimZat (zatoshi u64) required",
+    ))?;
     let agent_id = args
         .get("agentId")
         .and_then(Value::as_str)
@@ -586,11 +605,15 @@ pub async fn anchor(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
                 .map_err(|e| map_wallet_err(&e, "getblockchaininfo"))?;
             deep_find(&v, "blocks", 2)
                 .and_then(|b| unwrap_u64(&b))
-                .ok_or(ToolError::slug("wallet-shape", "no tip height in getblockchaininfo"))?
+                .ok_or(ToolError::slug(
+                    "wallet-shape",
+                    "no tip height in getblockchaininfo",
+                ))?
         };
         let memo_height = tip + 1; // window: next block at send time
 
-        let (_memo, txid, mut rec) =            submit_attempt(ctx, &agent_id, claim, &ua, issued, max_age, memo_height).await?;
+        let (_memo, txid, mut rec) =
+            submit_attempt(ctx, &agent_id, claim, &ua, issued, max_age, memo_height).await?;
         attempts += 1;
         rec.txid = txid.clone();
         rec.attempts = attempts;
@@ -615,9 +638,7 @@ pub async fn anchor(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
             (Some(_), a) if a >= ctx.max_anchor_retries => {
                 return Err(ToolError::slug(
                     "height-drift-retries-exhausted",
-                    format!(
-                        "anchor {txid} mined off window; {a} supersede attempts exhausted "
-                    ),
+                    format!("anchor {txid} mined off window; {a} supersede attempts exhausted "),
                 ))
             }
             // Height unavailable (beta parity / slow confirm): finalize with honest
@@ -642,7 +663,9 @@ async fn plan_dry(
     let (bal, interp) = if ua.is_empty() {
         (None, "ua-unavailable-derivation-failed")
     } else {
-        balance_of(ctx, ctx.cfg.attest_account).await.unwrap_or((None, "balance-family-failed"))
+        balance_of(ctx, ctx.cfg.attest_account)
+            .await
+            .unwrap_or((None, "balance-family-failed"))
     };
     let need = claim.saturating_add(FEE_ESTIMATE_ZAT);
     let enough = bal.map(|b| b >= need);
@@ -759,7 +782,12 @@ pub async fn publish(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
         }));
     }
     let url = format!("{}/v0/attestations", ctx.registry_url);
-    let resp = ctx.http.post(&url).json(&json!({"object": b64})).send().await
+    let resp = ctx
+        .http
+        .post(&url)
+        .json(&json!({"object": b64}))
+        .send()
+        .await
         .map_err(|_| ToolError::slug("registry-unreachable", format!("POST {url} failed")))?;
     let status = resp.status();
     let body: Value = resp
@@ -812,7 +840,7 @@ pub async fn share_scope(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError
             "no sub-accounts configured; set ZSOL_SHARE_ACCOUNTS (attestation-named accounts only)",
         ));
     }
-    if ctx.share_accounts.iter().any(|&a| a == 0) {
+    if ctx.share_accounts.contains(&0) {
         return Err(ToolError::slug(
             "scope-refused",
             "ZSOL_SHARE_ACCOUNTS includes account 0 — refusing whole list",
@@ -832,8 +860,10 @@ pub async fn share_scope(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError
         .addr_for_account(target, &["orchard", "sapling"])
         .await
         .map_err(|e| map_wallet_err(&e, "z_getaddressforaccount"))?;
-    let ua = deep_find_ua(&ua_v, 5)
-        .ok_or(ToolError::slug("wallet-shape", "no unified address in derivation reply"))?;
+    let ua = deep_find_ua(&ua_v, 5).ok_or(ToolError::slug(
+        "wallet-shape",
+        "no unified address in derivation reply",
+    ))?;
 
     // Export family: parity-tolerant; per-verb params tried (UA-shaped first).
     let mut uivk: Option<String> = None;
@@ -908,17 +938,12 @@ pub async fn import_scope(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolErro
         .map_err(|e| map_wallet_err(&e, "z_importkey"))?;
 
     // Imported scope's account index (parity-tolerant; counts-only output, no addresses).
-    let idx: Option<u64> = ctx
-        .w
-        .list_accounts()
-        .await
-        .ok()
-        .and_then(|v| {
-            let arr = v.as_array()?;
-            let last = arr.last()?;
-            unwrap_u64(&deep_find(last, "account", 2).unwrap_or(Value::Null))
-                .or_else(|| Some(arr.len().saturating_sub(1) as u64))
-        });
+    let idx: Option<u64> = ctx.w.list_accounts().await.ok().and_then(|v| {
+        let arr = v.as_array()?;
+        let last = arr.last()?;
+        unwrap_u64(&deep_find(last, "account", 2).unwrap_or(Value::Null))
+            .or_else(|| Some(arr.len().saturating_sub(1) as u64))
+    });
     let (bal, interp) = match idx {
         Some(i) => match balance_of(ctx, i).await {
             Ok((b, it)) => (b, it),
@@ -928,13 +953,12 @@ pub async fn import_scope(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolErro
     };
     *ctx.scope
         .lock()
-        .map_err(|_| ToolError::slug("internal", "state lock poisoned"))? =
-        Some(ScopeRecord {
-            label: label.clone(),
-            account_idx: idx,
-            balance_zat: bal,
-            balance_interpretation: Some(interp),
-        });
+        .map_err(|_| ToolError::slug("internal", "state lock poisoned"))? = Some(ScopeRecord {
+        label: label.clone(),
+        account_idx: idx,
+        balance_zat: bal,
+        balance_interpretation: Some(interp),
+    });
     okv(json!({
         "imported": true,
         "label": label,
@@ -955,15 +979,33 @@ struct Check {
 }
 
 fn row_ok(name: &'static str, detail: impl Into<String>) -> Check {
-    Check { name, ok: true, reason: None, slug: None, detail: detail.into() }
+    Check {
+        name,
+        ok: true,
+        reason: None,
+        slug: None,
+        detail: detail.into(),
+    }
 }
 
 fn row_reason(rc: ReasonCode, name: &'static str, detail: impl Into<String>) -> Check {
-    Check { name, ok: false, reason: Some(rc), slug: None, detail: detail.into() }
+    Check {
+        name,
+        ok: false,
+        reason: Some(rc),
+        slug: None,
+        detail: detail.into(),
+    }
 }
 
 fn row_slug(s: &'static str, name: &'static str, detail: impl Into<String>) -> Check {
-    Check { name, ok: false, reason: None, slug: Some(s), detail: detail.into() }
+    Check {
+        name,
+        ok: false,
+        reason: None,
+        slug: Some(s),
+        detail: detail.into(),
+    }
 }
 
 impl Check {
@@ -997,7 +1039,11 @@ pub async fn verify(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
         Err(zsol_types::ZsolError::Claim(rc)) => {
             checks.push(row_reason(rc, "structural", "structural validation failed"))
         }
-        Err(other) => checks.push(row_slug("malformed-object", "structural", other.to_string())),
+        Err(other) => checks.push(row_slug(
+            "malformed-object",
+            "structural",
+            other.to_string(),
+        )),
     }
 
     // C2 memo re-parse.
@@ -1062,10 +1108,13 @@ pub async fn verify(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
     let mut mined_ok = false;
     match view {
         Ok(_) => {
-            checks.push(row_ok("anchor-visible-in-scan", "txid known to imported scope"));
+            checks.push(row_ok(
+                "anchor-visible-in-scan",
+                "txid known to imported scope",
+            ));
             mined_ok = true;
         }
-        Err(WalletError::Rpc { code, .. }) if matches!(code, -8 | -5) => {
+        Err(WalletError::Rpc { code, .. }) if [-8, -5].contains(&code) => {
             checks.push(row_reason(
                 ReasonCode::AnchorNotMined,
                 "anchor-visible-in-scan",
@@ -1094,11 +1143,16 @@ pub async fn verify(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
                         .filter_map(|o| {
                             deep_find(o, "valueZat", 2)
                                 .and_then(|z| unwrap_u64(&z))
-                                .or_else(|| num_to_zat(&deep_find(o, "value", 2).unwrap_or(Value::Null)))
+                                .or_else(|| {
+                                    num_to_zat(&deep_find(o, "value", 2).unwrap_or(Value::Null))
+                                })
                         })
                         .sum();
                     if sum >= obj.claim_zat {
-                        checks.push(row_ok("outputs-geq-claim", format!("sum {sum} ≥ claim {}", obj.claim_zat)));
+                        checks.push(row_ok(
+                            "outputs-geq-claim",
+                            format!("sum {sum} ≥ claim {}", obj.claim_zat),
+                        ));
                     } else {
                         checks.push(row_reason(
                             ReasonCode::ClaimExceedsOutputs,
@@ -1119,7 +1173,10 @@ pub async fn verify(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
         if let Some(i) = scope.account_idx {
             match balance_of(ctx, i).await {
                 Ok((Some(bal), interp)) if bal >= obj.claim_zat => {
-                    checks.push(row_ok("balance-at-scan", format!("{bal} ≥ claim {} ({interp})", obj.claim_zat)));
+                    checks.push(row_ok(
+                        "balance-at-scan",
+                        format!("{bal} ≥ claim {} ({interp})", obj.claim_zat),
+                    ));
                 }
                 Ok((Some(bal), interp)) => checks.push(row_reason(
                     ReasonCode::BalanceBelowClaim,
@@ -1147,7 +1204,10 @@ pub async fn verify(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolError> {
         .map(|d| d <= (obj.max_age_hours as u64) * 3600)
         .unwrap_or(false); // issuedAt from the future is also not fresh
     if fresh {
-        checks.push(row_ok("freshness", format!("within {}h", obj.max_age_hours)));
+        checks.push(row_ok(
+            "freshness",
+            format!("within {}h", obj.max_age_hours),
+        ));
     } else {
         checks.push(row_reason(
             ReasonCode::StaleAttestation,
@@ -1185,14 +1245,9 @@ pub async fn registry_fetch(ctx: &ToolCtx, args: &Value) -> Result<Value, ToolEr
         return Err(ToolError::slug("invalid-args", "agentId required"));
     }
     let url = format!("{}/v0/attestations/{}", ctx.registry_url, agent_id);
-    let resp = ctx
-        .http
-        .get(&url)
-        .send()
-        .await
-        .map_err(|_| {
-            ToolError::reason(ReasonCode::RegistryUnreachable, format!("GET {url} failed"))
-        })?;
+    let resp = ctx.http.get(&url).send().await.map_err(|_| {
+        ToolError::reason(ReasonCode::RegistryUnreachable, format!("GET {url} failed"))
+    })?;
     let status = resp.status();
     let body: Value = resp
         .json()
@@ -1284,8 +1339,9 @@ mod tests {
         // Tiny pools may collide two labels to one slot — that is acceptable and
         // documented (scopes are per-verifier by PROCESS); the fold only needs to
         // spread over many labels.
-        let seen: std::collections::HashSet<usize> =
-            (0..50u32).map(|i| label_slot(&format!("agent-{i}"), 3)).collect();
+        let seen: std::collections::HashSet<usize> = (0..50u32)
+            .map(|i| label_slot(&format!("agent-{i}"), 3))
+            .collect();
         assert_eq!(seen.len(), 3);
     }
 
@@ -1305,7 +1361,10 @@ mod tests {
     fn ac_frame_fixed_point() {
         let frame = frame_pre("agent-1", 1_000_000, "u1test", 1_769_337_600, 24);
         let d = frame.digest().unwrap();
-        let memo = AnchorMemo { height: 4_509_900, digest: d };
+        let memo = AnchorMemo {
+            height: 4_509_900,
+            digest: d,
+        };
         let full = AttestationObject {
             protocol: PROTOCOL.to_string(),
             agent_id: "agent-1".into(),

@@ -30,9 +30,11 @@ fn golden() -> AttestationObject {
         max_age_hours: 24,
     };
     let d = o.digest().unwrap();
-    let memo = AnchorMemo { height: o.anchor_height, digest: d };
-    o.memo_binding =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(memo.encode());
+    let memo = AnchorMemo {
+        height: o.anchor_height,
+        digest: d,
+    };
+    o.memo_binding = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(memo.encode());
     o
 }
 
@@ -62,10 +64,7 @@ fn dump_fixtures_when_env_set() {
     let tampered_canon = tampered.canonical().unwrap();
     std::fs::write(
         dir.join("tampered_claim.json"),
-        serde_json::to_vec(
-            &serde_json::from_slice::<Value>(&tampered_canon).unwrap(),
-        )
-        .unwrap(),
+        serde_json::to_vec(&serde_json::from_slice::<Value>(&tampered_canon).unwrap()).unwrap(),
     )
     .unwrap();
 
@@ -74,8 +73,7 @@ fn dump_fixtures_when_env_set() {
     let dust_canon = dust.canonical().unwrap();
     std::fs::write(
         dir.join("dust_claim.json"),
-        serde_json::to_vec(&serde_json::from_slice::<Value>(&dust_canon).unwrap())
-            .unwrap(),
+        serde_json::to_vec(&serde_json::from_slice::<Value>(&dust_canon).unwrap()).unwrap(),
     )
     .unwrap();
 
@@ -83,17 +81,16 @@ fn dump_fixtures_when_env_set() {
     // to word boundaries; SPEC §5 tolerance). Canonical object with the padded
     // memoBinding — decode_prefix still reads the 45-byte prefix.
     let mut padded = g.clone();
-    let mut memo_bytes =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&padded.memo_binding).unwrap();
+    let mut memo_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&padded.memo_binding)
+        .unwrap();
     let pad = 60usize.saturating_sub(memo_bytes.len());
-    memo_bytes.extend(std::iter::repeat(0u8).take(pad));
-    padded.memo_binding =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&memo_bytes);
+    memo_bytes.extend(std::iter::repeat_n(0u8, pad));
+    padded.memo_binding = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&memo_bytes);
     let padded_canon = padded.canonical().unwrap();
     std::fs::write(
         dir.join("memo_padded.json"),
-        serde_json::to_vec(&serde_json::from_slice::<Value>(&padded_canon).unwrap())
-            .unwrap(),
+        serde_json::to_vec(&serde_json::from_slice::<Value>(&padded_canon).unwrap()).unwrap(),
     )
     .unwrap();
 }
@@ -112,8 +109,8 @@ fn load_all_fixtures() {
         count += 1;
         let bytes = std::fs::read(&path).unwrap();
         let name_wants_valid = path.file_name().unwrap() != "dust_claim.json";
-        let o: AttestationObject = serde_json::from_slice(&bytes)
-            .unwrap_or_else(|e| panic!("{}: {}", path.display(), e));
+        let o: AttestationObject =
+            serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("{}: {}", path.display(), e));
         // canonical round-trip immutability (§7 MUST: canonical-only)
         let canon = o.canonical().unwrap();
         assert_eq!(canon, bytes, "file {} is not canonical", path.display());
@@ -124,11 +121,16 @@ fn load_all_fixtures() {
         } else {
             assert!(matches!(
                 o.validate(),
-                Err(zsol_types::ZsolError::Claim(zsol_types::ReasonCode::DustClaim))
+                Err(zsol_types::ZsolError::Claim(
+                    zsol_types::ReasonCode::DustClaim
+                ))
             ));
         }
     }
-    assert_eq!(count, 4, "corpus must be non-empty (golden/tampered/dust/padded)");
+    assert_eq!(
+        count, 4,
+        "corpus must be non-empty (golden/tampered/dust/padded)"
+    );
 }
 
 /// Golden object: memo binds at least one non-nil digest equal to the recomputed
@@ -138,8 +140,9 @@ fn golden_memo_binds_frame_digest() {
     let bytes = std::fs::read(fixtures_dir().join("golden_object.json"))
         .expect("run the fixture dump first (ZSOL_DUMP_FIXTURES=1)");
     let o: AttestationObject = serde_json::from_slice(&bytes).unwrap();
-    let memo_bytes =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&o.memo_binding).unwrap();
+    let memo_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&o.memo_binding)
+        .unwrap();
     let memo = AnchorMemo::decode_prefix(&memo_bytes).unwrap();
     assert_eq!(memo.digest, o.digest().unwrap());
     assert_eq!(memo.height, o.anchor_height);
@@ -153,8 +156,9 @@ fn tampered_claim_breaks_frame_digest() {
     let bytes = std::fs::read(fixtures_dir().join("tampered_claim.json"))
         .expect("run the fixture dump first (ZSOL_DUMP_FIXTURES=1)");
     let o: AttestationObject = serde_json::from_slice(&bytes).unwrap();
-    let memo_bytes =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&o.memo_binding).unwrap();
+    let memo_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&o.memo_binding)
+        .unwrap();
     let memo = AnchorMemo::decode_prefix(&memo_bytes).unwrap();
     assert_ne!(memo.digest, o.digest().unwrap());
     // claim moved by exactly +1 zat (the tamper is minimal, not accidental)
@@ -169,6 +173,8 @@ fn dust_claim_rejected() {
     let o: AttestationObject = serde_json::from_slice(&bytes).unwrap();
     assert!(matches!(
         o.validate(),
-        Err(zsol_types::ZsolError::Claim(zsol_types::ReasonCode::DustClaim))
+        Err(zsol_types::ZsolError::Claim(
+            zsol_types::ReasonCode::DustClaim
+        ))
     ));
 }

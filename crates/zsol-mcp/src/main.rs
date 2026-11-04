@@ -27,15 +27,16 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr) // stdout is stdio-protocol-reserved
         .init();
 
-    let ctx = ops::ToolCtx::from_env()
-        .map_err(|e| anyhow::anyhow!("config: {e}"))?;
+    let ctx = ops::ToolCtx::from_env().map_err(|e| anyhow::anyhow!("config: {e}"))?;
     tracing::info!(
         dry_run = ctx.dry_run,
         registry = %ctx.registry_url,
         "zsol-mcp starting (stdio MCP gateway)"
     );
 
-    let http_bind = std::env::var("ZSOL_MCP_HTTP_BIND").ok().filter(|s| !s.is_empty());
+    let http_bind = std::env::var("ZSOL_MCP_HTTP_BIND")
+        .ok()
+        .filter(|s| !s.is_empty());
     if let Some(bind) = http_bind {
         let app = http::router(Arc::clone(&ctx));
         let listener = tokio::net::TcpListener::bind(&bind).await?;
@@ -47,7 +48,10 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    if std::env::var("ZSOL_MCP_NO_STDIO").map(|v| v == "1").unwrap_or(false) {
+    if std::env::var("ZSOL_MCP_NO_STDIO")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
         // HTTP-only mode (daemon): idle forever.
         tracing::info!("http-only mode (ZSOL_MCP_NO_STDIO=1)");
         tokio::signal::ctrl_c().await?;

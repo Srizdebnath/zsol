@@ -72,7 +72,11 @@ async fn main() -> ExitCode {
     probe("getblockchaininfo", client.info(), &mut results).await;
     probe(
         "z_listaccounts",
-        client.call(Base::Zallet, &cfg.methods.list_accounts, serde_json::json!([])),
+        client.call(
+            Base::Zallet,
+            &cfg.methods.list_accounts,
+            serde_json::json!([]),
+        ),
         &mut results,
     )
     .await;
@@ -107,12 +111,7 @@ async fn main() -> ExitCode {
         &mut results,
     )
     .await;
-    probe(
-        "z_getoperationstatus",
-        client.op_status(),
-        &mut results,
-    )
-    .await;
+    probe("z_getoperationstatus", client.op_status(), &mut results).await;
     probe(
         "z_getoperationresult",
         client.op_result("nonexistent-op-probe"),
@@ -164,17 +163,43 @@ async fn main() -> ExitCode {
 
     if emit_pins {
         let present = |p: &str| -> bool {
-            results.iter().any(|(lbl, st)| *lbl == p && matches!(st, VerbState::Present | VerbState::ParamShape(_)))
+            results.iter().any(|(lbl, st)| {
+                *lbl == p && matches!(st, VerbState::Present | VerbState::ParamShape(_))
+            })
         };
         println!("--- suggested .env.zallet-pins (fill from real probes) ---");
         for m in [
-            ("ZSOL_RPC_METHOD_INFO", "getblockchaininfo", "getblockchaininfo"),
-            ("ZSOL_RPC_METHOD_LISTACCOUNTS", "z_listaccounts", "z_listaccounts"),
-            ("ZSOL_RPC_METHOD_ADDRFORACCT", "z_getaddressforaccount", "z_getaddressforaccount"),
+            (
+                "ZSOL_RPC_METHOD_INFO",
+                "getblockchaininfo",
+                "getblockchaininfo",
+            ),
+            (
+                "ZSOL_RPC_METHOD_LISTACCOUNTS",
+                "z_listaccounts",
+                "z_listaccounts",
+            ),
+            (
+                "ZSOL_RPC_METHOD_ADDRFORACCT",
+                "z_getaddressforaccount",
+                "z_getaddressforaccount",
+            ),
             ("ZSOL_RPC_METHOD_SEND", "z_sendmany", "z_sendmany"),
-            ("ZSOL_RPC_METHOD_OPSTATUS", "z_getoperationstatus", "z_getoperationstatus"),
-            ("ZSOL_RPC_METHOD_OPRESULT", "z_getoperationresult", "z_getoperationresult"),
-            ("ZSOL_RPC_METHOD_VIEWTX", "z_viewtransaction", "z_viewtransaction"),
+            (
+                "ZSOL_RPC_METHOD_OPSTATUS",
+                "z_getoperationstatus",
+                "z_getoperationstatus",
+            ),
+            (
+                "ZSOL_RPC_METHOD_OPRESULT",
+                "z_getoperationresult",
+                "z_getoperationresult",
+            ),
+            (
+                "ZSOL_RPC_METHOD_VIEWTX",
+                "z_viewtransaction",
+                "z_viewtransaction",
+            ),
             ("ZSOL_RPC_METHOD_IMPORTKEY", "z_importkey", "z_importkey"),
             ("ZSOL_RPC_METHOD_GETBLOCK", "getblock", "getblock"),
         ] {

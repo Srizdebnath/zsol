@@ -27,7 +27,10 @@ pub struct Policy {
 fn load() -> Policy {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/pricing-policy.json");
     serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_else(|e| {
-        panic!("cannot read {}: {e} (test must run inside the repo)", p.display())
+        panic!(
+            "cannot read {}: {e} (test must run inside the repo)",
+            p.display()
+        )
     }))
     .expect("config/pricing-policy.json must parse")
 }
@@ -43,9 +46,15 @@ fn policy_sane() {
     assert!(verified.discount_bps >= claim_only.discount_bps);
     // bps bounds: 0 % ≤ x ≤ 100 %
     for (name, t) in &pol.tiers {
-        assert!(t.discount_bps <= 10_000, "tier {name} discount out of range");
+        assert!(
+            t.discount_bps <= 10_000,
+            "tier {name} discount out of range"
+        );
     }
-    assert_eq!(verified.discount_bps, 100, "demo default: 1 % verified discount");
+    assert_eq!(
+        verified.discount_bps, 100,
+        "demo default: 1 % verified discount"
+    );
     assert_eq!(claim_only.discount_bps, 0, "claim-only never surcharges");
 }
 

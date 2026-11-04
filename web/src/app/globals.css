@@ -1,0 +1,67 @@
+/* zsol neobrutalism tokens (FR-6.1): hard borders, hard shadows, mono type.
+   No mock data ever renders from here — every data path hits real endpoints;
+   down services render an explicit DOWN state. */
+:root {
+  --ink: #101010;
+  --paper: #fdf6e3;
+  --card: #ffffff;
+  --yellow: #ffd93d;
+  --pink: #ff6b9d;
+  --blue: #4dabf7;
+  --green: #69db7c;
+  --red: #ff8787;
+  --border-w: 3px;
+  --shadow-hard: 6px 6px 0 0 var(--ink);
+  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  margin: 0;
+  padding: 0;
+}
+
+main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+
+h1 { font-size: 2rem; letter-spacing: -0.03em; }
+h1 span { background: var(--yellow); border: var(--border-w) solid var(--ink); padding: 0 8px; box-shadow: var(--shadow-hard); display: inline-block; }
+h2 { font-size: 1.2rem; }
+a { color: var(--ink); text-decoration-thickness: 2px; }
+pre, code { font-family: var(--font-mono); }
+
+.nav { display: flex; gap: 12px; padding: 16px; border-bottom: var(--border-w) solid var(--ink); background: var(--paper); }
+.nav a { border: var(--border-w) solid var(--ink); background: var(--card); padding: 6px 12px; box-shadow: 4px 4px 0 0 var(--ink); font-weight: 700; }
+.nav a:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 0 var(--ink); }
+
+.card { background: var(--card); border: var(--border-w) solid var(--ink); box-shadow: var(--shadow-hard); padding: 16px; margin-top: 20px; }
+
+.status-ok { background: var(--green); border: var(--border-w) solid var(--ink); padding: 2px 8px; font-weight: 700; display: inline-block; }
+.status-down { background: var(--red); border: var(--border-w) solid var(--ink); padding: 2px 8px; font-weight: 700; display: inline-block; }
+.tier-verified { background: var(--green); border: var(--border-w) solid var(--ink); padding: 2px 8px; font-weight: 700; }
+.tier-claim-only { background: var(--yellow); border: var(--border-w) solid var(--ink); padding: 2px 8px; font-weight: 700; }
+
+table.entries { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+table.entries th, table.entries td { border: 2px solid var(--ink); padding: 6px 8px; text-align: left; word-break: break-all; }
+table.entries th { background: var(--yellow); }
+
+.check-row { display: flex; gap: 10px; padding: 6px 8px; border: 2px solid var(--ink); margin-top: 8px; align-items: baseline; }
+.check-name { font-weight: 700; min-width: 220px; }
+.check-pass { background: var(--green); }
+.check-fail { background: var(--pink); }
+.check-unknown { background: var(--paper); }
+
+button.btn { font-family: var(--font-mono); font-size: 1rem; font-weight: 700; border: var(--border-w) solid var(--ink); background: var(--blue); box-shadow: var(--shadow-hard); padding: 10px 18px; cursor: pointer; }
+button.btn:active { transform: translate(3px, 3px); box-shadow: 3px 3px 0 0 var(--ink); }
+
+input[type="text"] { font-family: var(--font-mono); font-size: 1rem; border: var(--border-w) solid var(--ink); padding: 8px 10px; width: 70%; }
+textarea { font-family: var(--font-mono); font-size: 0.85rem; border: var(--border-w) solid var(--ink); padding: 8px 10px; width: 100%; min-height: 120px; }
+
+.kv { display: grid; grid-template-columns: 220px 1fr; gap: 6px 12px; font-size: 0.85rem; }
+.kv dt { font-weight: 700; }
+.kv dd { margin: 0; word-break: break-all; }
+
+.footnote { margin-top: 28px; font-size: 0.7rem; border-top: 2px solid var(--ink); padding-top: 8px; }

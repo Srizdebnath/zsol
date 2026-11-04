@@ -13,8 +13,7 @@ async fn main() -> anyhow::Result<()> {
         .json() // T-29: structured JSON logs (req_id added per request by middleware)
         .init();
 
-    let bind =
-        std::env::var("ZSOL_REGISTRY_BIND").unwrap_or_else(|_| "127.0.0.1:8088".to_string());
+    let bind = std::env::var("ZSOL_REGISTRY_BIND").unwrap_or_else(|_| "127.0.0.1:8088".to_string());
     let db_path = std::env::var("ZSOL_REGISTRY_DB")
         .map_err(|_| anyhow::anyhow!("ZSOL_REGISTRY_DB must be set (no silent db location)"))?;
 
@@ -29,7 +28,9 @@ async fn main() -> anyhow::Result<()> {
     zsol_registry::init_db(&mut conn)?;
     tracing::info!(%db_path, "registry db initialized (WAL, append-only triggers)");
 
-    let state = zsol_registry::AppState { db: Arc::new(Mutex::new(conn)) };
+    let state = zsol_registry::AppState {
+        db: Arc::new(Mutex::new(conn)),
+    };
     let limits = zsol_registry::Limits::from_env();
     tracing::info!(
         max_body = limits.max_body_bytes,

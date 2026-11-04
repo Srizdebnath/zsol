@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test (incl. fixtures corpus, SPEC drift, pricing policy, T-08 harness)
+        run: cargo test --workspace
+      - name: build release (zsol-registry + zsol-mcp)
+        run: cargo build --release -p zsol-registry -p zsol-mcp
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install
+        run: pnpm -C web install --no-frozen-lockfile
+      # Endpoints may be absent in CI: every page renders an explicit DOWN state
+      # from unset/env-dead URLs — the build itself must not fabricate data.
+      - name: build
+        run: pnpm -C web build
+
+  docs-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: FR-7.2 no-mock lint (runtime crates/web/operator scripts)
+        run: bash scripts/no-mocks.sh

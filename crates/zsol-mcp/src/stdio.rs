@@ -3,9 +3,9 @@
 
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::io::stdout;
 use serde_json::Value;
+use tokio::io::stdout;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::ops::ToolCtx;
 use crate::{mcp, proto};
@@ -26,13 +26,21 @@ pub async fn run(ctx: Arc<ToolCtx>) -> std::io::Result<()> {
             vec![serde_json::json!({"pending_response_marker": true, "id": id, "code": code, "msg": msg})]
         });
         let mut responses: Vec<Value> = Vec::new();
-        if batch.iter().all(|v| v.get("pending_response_marker").is_some()) {
+        if batch
+            .iter()
+            .all(|v| v.get("pending_response_marker").is_some())
+        {
             let (id, code, msg) = {
                 let b = batch[0].clone();
                 (
                     b.get("id").cloned().unwrap_or(Value::Null),
-                    b.get("code").and_then(Value::as_i64).unwrap_or(proto::PARSE),
-                    b.get("msg").and_then(Value::as_str).unwrap_or("parse error").to_string(),
+                    b.get("code")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(proto::PARSE),
+                    b.get("msg")
+                        .and_then(Value::as_str)
+                        .unwrap_or("parse error")
+                        .to_string(),
                 )
             };
             responses.push(proto::error(&id, code, &msg));
@@ -42,7 +50,8 @@ pub async fn run(ctx: Arc<ToolCtx>) -> std::io::Result<()> {
             }
         }
         for r in responses {
-            out.write_all(serde_json::to_string(&r).unwrap_or_default().as_bytes()).await?;
+            out.write_all(serde_json::to_string(&r).unwrap_or_default().as_bytes())
+                .await?;
             out.write_all(b"\n").await?;
             out.flush().await?;
         }

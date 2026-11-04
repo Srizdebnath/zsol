@@ -53,4 +53,3 @@ async fn post_mcp(State(ctx): State<Arc<ToolCtx>>, body: String) -> Response {
     };
     (StatusCode::OK, Json(out)).into_response()
 }
-

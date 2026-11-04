@@ -201,14 +201,12 @@ pub fn publish(conn: &mut Connection, body: Value, now: u64) -> Result<Published
     }
 
     // Structural floors (§9 codes reused where the taxonomy has one).
-    object
-        .validate()
-        .map_err(|e| match e {
-            ZsolError::Claim(rc) => RegistryReject::Reason(rc),
-            ZsolError::Json => RegistryReject::Malformed("object json".into()),
-            ZsolError::Base64 => RegistryReject::Malformed("object b64u".into()),
-            other => RegistryReject::Malformed(format!("{other}")),
-        })?;
+    object.validate().map_err(|e| match e {
+        ZsolError::Claim(rc) => RegistryReject::Reason(rc),
+        ZsolError::Json => RegistryReject::Malformed("object json".into()),
+        ZsolError::Base64 => RegistryReject::Malformed("object b64u".into()),
+        other => RegistryReject::Malformed(format!("{other}")),
+    })?;
 
     let tx = conn
         .transaction()
@@ -348,12 +346,13 @@ pub fn fetch(conn: &Connection, agent_id: &str) -> Result<FetchResult, RegistryR
     let rows = stmt
         .query_map(params![agent_id], |r| {
             let obj_bytes: Vec<u8> = r.get(4)?;
-            let object: AttestationObject = serde_json::from_slice(&obj_bytes)
-                .map_err(|_| rusqlite::Error::FromSqlConversionFailure(
+            let object: AttestationObject = serde_json::from_slice(&obj_bytes).map_err(|_| {
+                rusqlite::Error::FromSqlConversionFailure(
                     4,
                     rusqlite::types::Type::Blob,
                     "stored object is not a valid AttestationObject".into(),
-                ))?;
+                )
+            })?;
             Ok(FetchEntry {
                 seq: r.get(0)?,
                 entry_id: r.get(1)?,
@@ -369,8 +368,7 @@ pub fn fetch(conn: &Connection, agent_id: &str) -> Result<FetchResult, RegistryR
         .map_err(|e| RegistryReject::Db(format!("fetch: {e}")))?;
 
     for row in rows {
-        entries
-            .push(row.map_err(|e| RegistryReject::Db(format!("row: {e}")))?);
+        entries.push(row.map_err(|e| RegistryReject::Db(format!("row: {e}")))?);
     }
 
     let chain_head_hex = conn
@@ -404,7 +402,11 @@ pub fn health(conn: &Connection) -> Result<HealthInfo, RegistryReject> {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|e| RegistryReject::Db(format!("health: {e}")))?;
-    Ok(HealthInfo { ok: true, chain_length: length, watermark_height: watermark })
+    Ok(HealthInfo {
+        ok: true,
+        chain_length: length,
+        watermark_height: watermark,
+    })
 }
 
 // ---------------- FR-3.4 rate limiter (per-IP token bucket; 429) ----------------
@@ -442,9 +444,10 @@ impl RateLimiter {
             .buckets
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let bucket = buckets
-            .entry(key.to_string())
-            .or_insert(Bucket { tokens: self.burst, last_refill: now });
+        let bucket = buckets.entry(key.to_string()).or_insert(Bucket {
+            tokens: self.burst,
+            last_refill: now,
+        });
         let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * self.per_second).min(self.burst);
         bucket.last_refill = now;
@@ -471,7 +474,11 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_body_bytes: 64_000, post_per_second: 5, post_burst: 10 }
+        Self {
+            max_body_bytes: 64_000,
+            post_per_second: 5,
+            post_burst: 10,
+        }
     }
 }
 
@@ -534,7 +541,8 @@ async fn request_logger(
         "request"
     );
     if let Ok(v) = header::HeaderValue::from_str(&req_id) {
-        resp.headers_mut().insert(header::HeaderName::from_static("x-request-id"), v);
+        resp.headers_mut()
+            .insert(header::HeaderName::from_static("x-request-id"), v);
     }
     resp
 }
@@ -560,10 +568,13 @@ async fn rate_limit_post(
 
 // ---------------- axum glue (thin; logic lives above) ----------------
 
-fn state_db_guard(state: &AppState) -> Result<std::sync::MutexGuard<'_, Connection>, RegistryReject> {
-    state.db.lock().map_err(|_| {
-        RegistryReject::Db("connection mutex poisoned (previous panic)".into())
-    })
+fn state_db_guard(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, Connection>, RegistryReject> {
+    state
+        .db
+        .lock()
+        .map_err(|_| RegistryReject::Db("connection mutex poisoned (previous panic)".into()))
 }
 
 async fn publish_route(
@@ -651,7 +662,10 @@ pub fn router(state: AppState, limits: Limits) -> Router {
         .route("/v0/health", get(health_route))
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(limits.max_body_bytes))
-        .layer(axum::middleware::from_fn_with_state(limiter, rate_limit_post))
+        .layer(axum::middleware::from_fn_with_state(
+            limiter,
+            rate_limit_post,
+        ))
         .layer(axum::middleware::from_fn(request_logger))
 }
 
@@ -736,7 +750,10 @@ mod tests {
         let mut proto = sample("agent-1", &"d".repeat(64), 1_769_337_600);
         proto.protocol = "other/9".into();
         let err = publish(&mut c, body_of(&proto), 111).unwrap_err();
-        assert!(matches!(err, RegistryReject::Reason(ReasonCode::ProtocolUnknown)));
+        assert!(matches!(
+            err,
+            RegistryReject::Reason(ReasonCode::ProtocolUnknown)
+        ));
     }
 
     /// MUST reject duplicate (agentId, anchorTxid) with existing entry surfaced.
@@ -796,17 +813,14 @@ mod tests {
             assert!(w[0].seq < w[1].seq);
             assert!(w[0].object.issued_at < w[1].object.issued_at);
         }
-        assert_eq!(
-            hex::encode(prev),
-            f.chain_head_hex.unwrap()
-        );
+        assert_eq!(hex::encode(prev), f.chain_head_hex.unwrap());
     }
 
     /// FR-1.5 tamper AC + SRS invariant 6: row mutation MUST be physically rejected.
     #[test]
     fn ac_append_only_enforced_by_triggers() {
         let mut c = open_mem();
-        let o = sample("agent-1", &"1f".repeat(64).get(..64).unwrap(), 1_769_337_600);
+        let o = sample("agent-1", "1f".repeat(64).get(..64).unwrap(), 1_769_337_600);
         publish(&mut c, body_of(&o), 111).unwrap();
         let up = c.execute(
             "UPDATE attestations SET object = ?1 WHERE seq = 1",
@@ -834,26 +848,55 @@ mod tests {
     fn ac_t08_chain_descended_harness() {
         let mut c = open_mem();
         // watermark starts at 0; any height accepted first
-        publish(&mut c, body_of(&sample_h("agent-1", &"10".repeat(32), 111, 500)), 111)
-            .expect("first anchor at height 500 accepted");
+        publish(
+            &mut c,
+            body_of(&sample_h("agent-1", &"10".repeat(32), 111, 500)),
+            111,
+        )
+        .expect("first anchor at height 500 accepted");
         // REGRESSION: 499 < 500 → refused with ChainDescended
-        let err = publish(&mut c, body_of(&sample_h("agent-1", &"11".repeat(32), 112, 499)), 112)
-            .unwrap_err();
-        assert!(matches!(err, RegistryReject::ChainDescended { watermark: 500, posted: 499 }));
+        let err = publish(
+            &mut c,
+            body_of(&sample_h("agent-1", &"11".repeat(32), 112, 499)),
+            112,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            RegistryReject::ChainDescended {
+                watermark: 500,
+                posted: 499
+            }
+        ));
         // wire status is 503 with slug chain-descended
         let (status, body) = err.wire();
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["error"], "chain-descended");
         // EQUAL height is allowed (multiple anchors may share a height)
-        publish(&mut c, body_of(&sample_h("agent-1", &"12".repeat(32), 113, 500)), 113)
-            .expect("equal height accepted");
+        publish(
+            &mut c,
+            body_of(&sample_h("agent-1", &"12".repeat(32), 113, 500)),
+            113,
+        )
+        .expect("equal height accepted");
         // advance
-        publish(&mut c, body_of(&sample_h("agent-1", &"13".repeat(32), 114, 501)), 114)
-            .expect("advance accepted");
+        publish(
+            &mut c,
+            body_of(&sample_h("agent-1", &"13".repeat(32), 114, 501)),
+            114,
+        )
+        .expect("advance accepted");
         // finally: an older agent re-anchoring at an older height regresses
-        let err = publish(&mut c, body_of(&sample_h("agent-2", &"14".repeat(32), 115, 400)), 115)
-            .unwrap_err();
-        assert!(matches!(err, RegistryReject::ChainDescended { watermark: 501, .. }));
+        let err = publish(
+            &mut c,
+            body_of(&sample_h("agent-2", &"14".repeat(32), 115, 400)),
+            115,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            RegistryReject::ChainDescended { watermark: 501, .. }
+        ));
         // health reports the watermark
         let h = health(&c).unwrap();
         assert_eq!(h.watermark_height, 501);
@@ -863,10 +906,20 @@ mod tests {
     #[test]
     fn ac_chain_descended_trigger_physical() {
         let mut c = open_mem();
-        publish(&mut c, body_of(&sample_h("agent-1", &"a1".repeat(32), 111, 900)), 111).unwrap();
-        let lowered = c
-            .execute("UPDATE chain_meta SET watermark_height = 500 WHERE id = 1", params![]);
-        assert!(lowered.is_err(), "watermark regression must abort (trigger)");
+        publish(
+            &mut c,
+            body_of(&sample_h("agent-1", &"a1".repeat(32), 111, 900)),
+            111,
+        )
+        .unwrap();
+        let lowered = c.execute(
+            "UPDATE chain_meta SET watermark_height = 500 WHERE id = 1",
+            params![],
+        );
+        assert!(
+            lowered.is_err(),
+            "watermark regression must abort (trigger)"
+        );
         let deleted = c.execute("DELETE FROM chain_meta WHERE id = 1", params![]);
         assert!(deleted.is_err(), "chain_meta row is immutable");
     }

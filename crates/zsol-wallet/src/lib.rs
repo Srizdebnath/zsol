@@ -220,7 +220,12 @@ impl Client {
 
     /// JSON-RPC 1.0 call. Returns raw `result`. RFC-consistent handling:
     /// `-32601` method-not-found ⇒ `WalletError::MissingVerb` (boot-pin reality check).
-    pub async fn call(&self, base: Base, method: &str, params: Value) -> Result<Value, WalletError> {
+    pub async fn call(
+        &self,
+        base: Base,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, WalletError> {
         let url = match base {
             Base::Zebra => &self.cfg.zebra_url,
             Base::Zallet => &self.cfg.zallet_url,
@@ -275,7 +280,8 @@ impl Client {
 
     /// Chain truth (Zebra).
     pub async fn info(&self) -> Result<Value, WalletError> {
-        self.call(Base::Zebra, &self.cfg.methods.info, json!([])).await
+        self.call(Base::Zebra, &self.cfg.methods.info, json!([]))
+            .await
     }
 
     pub async fn list_accounts(&self) -> Result<Value, WalletError> {
@@ -283,9 +289,9 @@ impl Client {
             .await
     }
 
-    /// Generic family probe (parity-aware, boot-pinned). Returns the method that WORKED
-    /// + its raw result. A param-shape error on a present verb still counts as "present"
-    /// (code -8/-5/-3/-32602 in zcashd-shaped RPCs) with Null result.
+    /// Generic family probe (parity-aware, boot-pinned). Returns the method that
+    /// WORKED and its raw result. A param-shape error on a present verb still counts
+    /// as "present" (code -8 / -5 / -3 / -32602 in zcashd-shaped RPCs), Null result.
     pub async fn probe_family(
         &self,
         verbs: &[String],
@@ -298,9 +304,7 @@ impl Client {
                 Err(WalletError::MissingVerb(_)) => {
                     last = Some(WalletError::MissingVerb(m.clone()))
                 }
-                Err(WalletError::Rpc { code, .. })
-                    if matches!(code, -8 | -5 | -3 | -32602) =>
-                {
+                Err(WalletError::Rpc { code, .. }) if [-8, -5, -3, -32602].contains(&code) => {
                     return Ok((m.clone(), Value::Null))
                 }
                 Err(e) => return Err(e),
@@ -337,7 +341,11 @@ impl Client {
     }
 
     /// Diversified same-account UA derivation (SPEC P5/§3 attest account).
-    pub async fn addr_for_account(&self, account: u64, ua_types: &[&str]) -> Result<Value, WalletError> {
+    pub async fn addr_for_account(
+        &self,
+        account: u64,
+        ua_types: &[&str],
+    ) -> Result<Value, WalletError> {
         self.call(
             Base::Zallet,
             &self.cfg.methods.addr_for_account,
@@ -368,7 +376,7 @@ impl Client {
     ) -> Value {
         let memo_b64 = base64::engine::general_purpose::STANDARD.encode(memo_bytes);
         json!([
-            from_account.to_string(),          // from: account alias "9"
+            from_account.to_string(), // from: account alias "9"
             [json!({
                 "address": to_ua,
                 "amount": amount_zat as f64,   // zcashd-shaped: numeric zat? pinned at boot; kept explicit
@@ -379,7 +387,8 @@ impl Client {
     }
 
     pub async fn send(&self, params: Value) -> Result<Value, WalletError> {
-        self.call(Base::Zallet, &self.cfg.methods.send, params).await
+        self.call(Base::Zallet, &self.cfg.methods.send, params)
+            .await
     }
 
     pub async fn op_status(&self) -> Result<Value, WalletError> {
@@ -427,7 +436,11 @@ mod tests {
     /// assumption so drift shows up as a test failure, not a runtime surprise (FR-2.4).
     #[test]
     fn ac_self_spend_params_shape() {
-        let memo = zsol_types::AnchorMemo { height: 1, digest: [3u8; 32] }.encode();
+        let memo = zsol_types::AnchorMemo {
+            height: 1,
+            digest: [3u8; 32],
+        }
+        .encode();
         let params = Client::build_self_spend_params(9, "u1x", 1_000_000, &memo, 1);
         let arr = params.as_array().unwrap();
         assert_eq!(arr.len(), 3);
