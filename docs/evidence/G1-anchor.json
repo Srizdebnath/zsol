@@ -1,0 +1,19 @@
+{
+  "frameDigest": "ba3b7162fc7a6811e6e6a01fd3a88750d43a84a75b0238b89ffc3976773eac0c",
+  "object": {
+    "agentId": "agent-a",
+    "anchorHeight": 4544949,
+    "anchorTxid": "30f12fbd02f03b18efff3114b7a6e4e9a4fd9ad32f714c3e774eba78f0706569",
+    "birthday": 4544845,
+    "claimZat": 5000000,
+    "issuedAt": 1793041598,
+    "maxAgeHours": 24,
+    "memoBinding": "_3pzMDK6O3Fi_HpoEebmoB_TqIdQ1DqEp1sCOLif_Dl2dz6sDA",
+    "network": "test",
+    "pool": "ironwood",
+    "protocol": "zsol/0.2",
+    "sessionKey": "SQvM6QwRrtq37VAfhGelogTBcxz8XwLSqzeZTdxHQGk"
+  },
+  "objectB64u": "eyJhZ2VudElkIjoiYWdlbnQtYSIsImFuY2hvckhlaWdodCI6NDU0NDk0OSwiYW5jaG9yVHhpZCI6IjMwZjEyZmJkMDJmMDNiMThlZmZmMzExNGI3YTZlNGU5YTRmZDlhZDMyZjcxNGMzZTc3NGViYTc4ZjA3MDY1NjkiLCJiaXJ0aGRheSI6NDU0NDg0NSwiY2xhaW1aYXQiOjUwMDAwMDAsImlzc3VlZEF0IjoxNzkzMDQxNTk4LCJtYXhBZ2VIb3VycyI6MjQsIm1lbW9CaW5kaW5nIjoiXzNwek1ESzZPM0ZpX0hwb0VlYm1vQl9UcUlkUTFEcUVwMXNDT0xpZl9EbDJkejZzREEiLCJuZXR3b3JrIjoidGVzdCIsInBvb2wiOiJpcm9ud29vZCIsInByb3RvY29sIjoienNvbC8wLjIiLCJzZXNzaW9uS2V5IjoiU1F2TTZRd1JydHEzN1ZBZmhHZWxvZ1RCY3h6OFh3TFNxemVaVGR4SFFHayJ9",
+  "secondsToMine": 126
+}
