@@ -21,5 +21,17 @@ export async function POST(req: Request) {
   if ("down" in r && r.down) {
     return Response.json({ error: "gateway down", detail: r.detail }, { status: 502 });
   }
+  // The MCP tool reply arrives as the call envelope {content:[{type:"text",
+  // text:JSON}]} — unwrap once here so the browser gets the actual verdict
+  // object (tier/checks), never a fabricated one.
+  const env = (r.result as { content?: { text?: string }[] } | null) ?? null;
+  const text = env?.content?.[0]?.text;
+  if (typeof text === "string") {
+    try {
+      return Response.json(JSON.parse(text));
+    } catch {
+      return Response.json({ error: "gateway reply unparseable", raw: text });
+    }
+  }
   return Response.json(r.result);
 }

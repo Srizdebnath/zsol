@@ -61,7 +61,16 @@ export async function registryAgent(id: string): Promise<FetchResult> {
     });
     if (res.status === 404) return { down: false, agentId: id, entries: [], chainOk: true };
     if (!res.ok) return { down: true, detail: `HTTP ${res.status}` };
-    const entries = (await res.json()) as Entry[];
+    const payload = (await res.json()) as
+      | Entry[]
+      | { entries?: Entry[]; agentId?: string };
+    // wire shape tolerance: zsol-registry replies {agentId, chainHead, entries};
+    // a bare array is accepted for SPEC §7 compat.
+    const entries: Entry[] = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.entries)
+        ? payload.entries
+        : [];
     return { down: false, agentId: id, entries, ...recheckChain(entries) };
   } catch (e) {
     return { down: true, detail: e instanceof Error ? e.name : "fetch error" };
@@ -77,7 +86,12 @@ export function recheckChain(entries: Entry[]): { chainOk: boolean; chainError?:
   let prev = GENESIS_HEX;
   try {
     for (const e of entries) {
-      const obj = JSON.parse(fromB64u(e.object)) as Record<string, unknown>;
+      // The registry may hand the object as b64u(canonical json) or already
+      // decoded — re-canonicalize whichever shape it is (sorted keys, compact).
+      const obj =
+        typeof e.object === "string"
+          ? (JSON.parse(fromB64u(e.object)) as Record<string, unknown>)
+          : (e.object as Record<string, unknown>);
       const canon = canonicalJson(obj);
       const d = blake2b256(hexToBytes(prev)!, new TextEncoder().encode(canon));
       const hex = bytesToHex(d);

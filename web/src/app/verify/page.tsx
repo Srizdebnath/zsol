@@ -4,7 +4,7 @@
 // list rendered from the REAL tool reply; failures keep their §9 reason codes.
 import { useState } from "react";
 
-type CheckRow = { pass?: boolean; name?: string; detail?: string; reason?: string };
+type CheckRow = { check?: string; name?: string; ok?: boolean; pass?: boolean; detail?: string; reason?: string };
 type VerifyPayload = {
   tier?: string;
   ok?: boolean;
@@ -84,10 +84,10 @@ export default function VerifyPage() {
                 <div
                   key={i}
                   className={`check-row ${
-                    c.pass === true ? "check-pass" : c.pass === false ? "check-fail" : "check-unknown"
+                    c.pass === true || c.ok === true ? "check-pass" : c.pass === false || (c.ok === false) ? "check-fail" : "check-unknown"
                   }`}
                 >
-                  <span className="check-name">{c.name ?? "check"}</span>
+                  <span className="check-name">{c.check ?? c.name ?? "check"}</span>
                   <span>{c.pass ? "PASS" : `FAIL${c.reason ? ` · ${c.reason}` : ""}`}</span>
                   {c.detail && <small>{c.detail}</small>}
                 </div>
