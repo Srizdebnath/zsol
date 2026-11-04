@@ -388,9 +388,11 @@ pub async fn verify(
                 Err((
                     ReasonCode::AnchoredNoteSpent,
                     format!(
-                        "spent in {} at height {:?}",
+                        "spent in {} at height {}",
                         spent[0].spent_in_txid.as_deref().unwrap_or("?"),
-                        spent[0].spent_height
+                        spent[0]
+                            .spent_height
+                            .map_or_else(|| "unknown".to_string(), |h| h.to_string())
                     ),
                 ))
             },

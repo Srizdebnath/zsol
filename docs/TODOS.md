@@ -48,7 +48,7 @@ notes say so.
 | G2 | `verified` from a separate verifier DB | `done-live-testnet` | [`G2-report.json`](evidence/G2-report.json): all of C1–C8 PASS at tip 4,544,963, in the underwriter's own wallet |
 | G3 | FR-3.2 negative cases | `done-live-testnet` | [`G3-negative-cases.md`](evidence/G3-negative-cases.md): `memo-digest-mismatch`, `presentation-invalid` (×2), `claim-exceeds-outputs` (txid `60fc81f2…8b67`), `not-spent-by-account` (txid `45f28601…be2a`). `4 passed; 0 failed`. |
 | G4 | Spending anchored notes makes the watch emit `released` | `done-live-testnet` | [`G4-G5-credit-loop.md`](evidence/G4-G5-credit-loop.md): release spend `8657a142…99ee` mined @ 4,546,446; desk emitted `attestation-released` on the tick that scanned that block (0 blocks lag). |
-| G5 | Verify → Bitrefill invoice → repayment detected | `done-live-testnet` | [`G4-G5-credit-loop.md`](evidence/G4-G5-credit-loop.md): loan `71b26fe0…`, Bitrefill invoice `b46f2eb7-c7a8-4f07-a2d9-35de7084b0b2`, repayment `a66d965f…bc37` → `repaid` @ 4,546,455. |
+| G5 | Verify → Bitrefill invoice → repayment detected | `done-live-testnet` | [`G4-G5-credit-loop.md`](evidence/G4-G5-credit-loop.md): loan `71b26fe0…`, Bitrefill invoice `b46f2eb7-c7a8-4f07-a2d9-35de7084b0b2`, repayment `a66d965f…bc37` → `repaid` @ 4,546,455. | Claim-only refusal (released attestation, C6): [`G5b-claim-only.md`](evidence/G5b-claim-only.md).
 | G6 | Public URL; judge self-verifies | `owner-descoped` | The owner rejected tunnels (no `cloudflared`). G6 becomes **"locally live"**: the stack runs on the laptop, and a judge self-verifies on that laptop through `/verify`. No evidence yet. |
 | G7 (stretch) | G1–G5 on local Zebra 7 + Zallet (PR #898) | `not-started` | `crates/zsol-wallet` (Zallet backend) is parked outside the workspace (FINDINGS F-8) |
 
@@ -60,7 +60,7 @@ notes say so.
 | FR-1.2 | Frame digest, BLAKE2b-256 personal `zsol/0.2-frame` | `in-progress` | `lib.rs` `FRAME_PERSONAL`, `frame_digest_bytes`, test `golden_frame_digest_matches_python_hashlib` | The digest is used live (G1 D=`ba3b7162…`, checked by C4 in G2). **Missing:** the AC requires a web/TS cross-language check of the *frame* digest. `web/src/lib/endpoints.ts` only recomputes the registry *chain* digest (unpersonalized BLAKE2b). |
 | FR-1.3 | Memo codec `0xFF‖"zs02"‖D`, padded to 512 bytes | `done-live-testnet` | `lib.rs` `AnchorMemo`, `LoanMemo`; proptest `prop_memo_roundtrip` (10,000 cases) | The memo was decoded on chain in G1/G2 (C4 PASS) |
 | FR-1.4 | Presentation message + Ed25519 | `done-live-testnet` | `lib.rs` `presentation_message`, `sign_presentation`, `verify_presentation`; tests `rfc8032_test_vector_1`, `presentation_accepts_genuine_and_rejects_every_tamper` | C8 PASS in G2; relayed and swapped challenges fail in G3b |
-| FR-1.5 | Reason codes and tiers as exhaustive enums, clippy `wildcard_enum_match_arm` denied | `in-progress` | `lib.rs` `ReasonCode`, `Tier` | The enums exist and round-trip. **Missing:** no `#![deny(clippy::wildcard_enum_match_arm)]` anywhere, and CI runs only the default `clippy -D warnings`. |
+| FR-1.5 | Reason codes and tiers as exhaustive enums | `done` | `zsol-types/src/lib.rs` (`#![deny(clippy::wildcard_enum_match_arm)]`) | Enforced by clippy in CI (2026-10-27). |
 
 ## FR-2 Light wallet backend (`crates/zsol-lightwallet`)
 
@@ -92,7 +92,7 @@ notes say so.
 
 | ID | Requirement | Status | Code | Evidence / notes |
 |---|---|---|---|---|
-| FR-5.1 | Attestor + verifier tools over stdio and HTTP; `claude mcp list` | `in-progress` | `src/mcp.rs` `tool_defs`, `src/ops.rs`, `src/stdio.rs`, `src/http.rs` | 13 tools are implemented: `zsol_health`, `zsol_wallet_status`, `zsol_anchor`, `zsol_attestations`, `zsol_publish`, `zsol_present`, `zsol_release`, `zsol_challenge`, `zsol_verify`, `zsol_watch`, `zsol_registry_fetch`, `credit_request`, `credit_repay`. **The names differ from SRS** (see inconsistencies). The only `claude mcp` evidence is the 0.1 regtest-era [`T32-T33`](evidence/T32-T33-claude-mcp.md). |
+| FR-5.1 | Attestor + verifier tools over stdio and HTTP; `claude mcp list` | `in-progress` | `src/mcp.rs` `tool_defs`, `src/ops.rs`, `src/stdio.rs`, `src/http.rs` | 13 tools are implemented: `zsol_health`, `zsol_wallet_status`, `zsol_anchor`, `zsol_attestations`, `zsol_publish`, `zsol_present`, `zsol_release`, `zsol_challenge`, `zsol_verify`, `zsol_watch`, `zsol_registry_fetch`, `credit_request`, `credit_repay`. **The names differ from SRS** (see inconsistencies). The only `claude mcp` evidence is the 0.1 regtest-era [`T32-T33`](evidence/T32-T33-claude-mcp.md). | SRS v2.1 now lists the implemented tool names.
 | FR-5.2 | Spend tools refuse unless `ZSOL_ALLOW_SPEND=1` and within `ZSOL_SPEND_CAP_ZAT` | `in-progress` | `src/ops.rs` `spend_gate` (used by `zsol_anchor`, `credit_repay`, `zsol_release`) | Gate applied to every broadcasting tool (2026-10-27). No automated negative test yet. |
 
 ## FR-6 Credit Desk (`crates/zsol-credit`)
@@ -114,7 +114,7 @@ All four pages have 0.2 code. The only web evidence is the 0.1 regtest-era
 |---|---|---|---|---|
 | FR-7.1 | `/` stack status: endpoint, branch, tip, sync lag per wallet | `in-progress` | `web/src/app/page.tsx` | Shows registry health and raw `zsol_health` JSON. Does **not** show the sync lag of each wallet. |
 | FR-7.2 | `/explorer` with client-side chain-digest recompute | `done-regtest-only` | `web/src/app/explorer/page.tsx`, `web/src/lib/endpoints.ts` `recheckChain` | Regtest only ([`T46-T48`](evidence/T46-T48-web.md)). Not run against a 0.2 registry. |
-| FR-7.3 | `/verify` judge self-serve | `in-progress` | `web/src/app/verify/page.tsx`, `api/challenge`, `api/verify` | Implemented as challenge → presentation → C1–C8 through MCP `zsol_verify`. The SRS describes "paste object + UFVK → C1–C7, C8 shown as needing the attestor" (see inconsistencies). |
+| FR-7.3 | `/verify` judge self-serve: challenge → presentation → C1–C8 | `in-progress` | `web/src/app/verify/page.tsx`, `/api/challenge`, `/api/verify` | SRS v2.1 aligned to the challenge flow. Not yet run end-to-end from a phone. |
 | FR-7.4 | `/desk` live loan board + SSE + explorer links | `in-progress` | `web/src/app/desk/page.tsx` (`EventSource` on `/v0/events`) | Explorer links depend on `NEXT_PUBLIC_EXPLORER_TX`, and no explorer indexes post-NU7 blocks yet |
 | FR-7 AC | Every number traces to a live endpoint; `no-mocks.sh` passes | `in-progress` | `scripts/no-mocks.sh` | No 0.2 run recorded |
 

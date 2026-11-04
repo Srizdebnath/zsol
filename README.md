@@ -118,6 +118,7 @@ All rows come from real runs against `testnet.zec.rocks:443` (ECC LightWalletD v
 | G5 precheck | Bitrefill API v2 test-product purchase, made by hand (not yet through zsol-credit) | invoice `23e5ebfa-d900-464f-934b-4c32232065fe` | [`G5-pre-bitrefill-api.md`](docs/evidence/G5-pre-bitrefill-api.md) |
 | G4 | `zsol_release` spends the anchored notes → desk watch emits `released`, loan → `at-risk` (0 blocks lag) | spend `8657a142cf9feabd6efa4ab229ccfd8693cb0260f8bf7dca132a58d84d3499ee` @ 4,546,446 | [`G4-G5-credit-loop.md`](docs/evidence/G4-G5-credit-loop.md) |
 | G5 | Anchor → `credit_request` (C1–C8 verified) → Bitrefill invoice + code → `credit_repay` → `repaid` | anchor `20ec2cc8…00ef`, invoice `b46f2eb7-c7a8-4f07-a2d9-35de7084b0b2`, repayment `a66d965f136b11b5c54014edc32154a2fb87727274fa515f23a0ae9eeb6cbc37` | [`G4-G5-credit-loop.md`](docs/evidence/G4-G5-credit-loop.md) |
+| G5b | Released attestation presented for credit → desk refuses `claim-only` (C6 `anchored-note-spent`), no invoice | release spend `8657a142…99ee` | [`G5b-claim-only.md`](docs/evidence/G5b-claim-only.md) |
 | G6 | Tunnel public URL **descoped by the owner**; judges self-verify on the demo laptop (`/verify`) | — | — |
 
 ## Honesty notes
