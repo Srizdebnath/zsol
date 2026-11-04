@@ -4,7 +4,6 @@
 //! No PII in errors: all address-bearing text stays inside server reply payloads that
 //! callers must not log above debug (SRS NF-6.2).
 
-use base64::Engine as _;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
